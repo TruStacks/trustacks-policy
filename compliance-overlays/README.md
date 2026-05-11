@@ -17,13 +17,7 @@ If you arrived here looking for a SOC2 / HIPAA / PCI / FedRAMP / ITIL pack, see 
 
 Compliance overlays — packs that codify rules tied to a regulated framework (SOC2, HIPAA, PCI-DSS, FedRAMP, ITIL, and others) — are **TruStacks-curated paid content**. They ship through a separate, signed distribution channel that's not part of this repository.
 
-The architectural reasoning:
-
-- **Auditor-defensibility.** A bug in a compliance rule isn't just a cosmetic regression — it can mean a failed audit. We accept that liability for content we curate and sign; we don't ask community contributors to take it on.
-- **Curation cadence.** Compliance frameworks evolve (a new SOC2 trust services criterion lands; a new HIPAA omnibus rule clarifies expectations). The TruStacks team tracks those changes and publishes pack updates on a quarterly cadence with a stated curation lineage.
-- **Commercial sustainability.** Paid compliance packs are a primary revenue stream for TruStacks; that revenue funds the open-core work in this repository.
-
-For more on the open-core / paid boundary, see [ADR-0013 in the product repo](https://github.com/TruStacks/trustacks-mvp/blob/main/docs/decisions/0013-open-core-boundary.md).
+The architectural reasoning (auditor-defensibility, curation cadence, commercial sustainability + the open-core boundary that this directory sits *outside* of) is documented in full at **[ADR-0013 § Where SOC2 lives](https://github.com/TruStacks/trustacks-mvp/blob/main/docs/decisions/0013-open-core-boundary.md#where-soc2-lives)** — including the diagram showing how the customer's signed overlay, the constitution's baseline behavior rules, the TruStacks-curated compliance overlays, and the customer's EnvironmentProfile cooperate at runtime. That ADR is the durable single source; this README points to it rather than duplicating the rationale.
 
 ---
 
