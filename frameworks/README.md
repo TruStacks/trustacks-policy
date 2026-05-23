@@ -34,6 +34,18 @@ The pack format is intentionally schema-strict. New top-level keys require a run
 
 ---
 
+## Design principle — packs and behavior rules cooperate
+
+Framework packs and the constitution's baseline behavior rules are **two halves of the same expectation**, not parallel surfaces. See **[ADR-0013 § Cooperating-layers principle](https://github.com/TruStacks/trustacks-mvp/blob/main/docs/decisions/0013-open-core-boundary.md#cooperating-layers-principle)** for the full architectural framing.
+
+The summary, in one line: **the framework pack is the recipe; the constitution's behavior rule is the required outcome.** Each pack's CI workflow template includes the steps (`mvn test`, `dotnet test`, …) that the constitution's `practice.workflow_has_test_step` rule then validates; each Dockerfile template ends with a non-root `USER` so the `practice.dockerfile_runs_as_nonroot` rule passes; every `uses:` line is pinned to a SHA so `practice.workflow_pins_action_versions` passes.
+
+**Practical contributor implication:** when you propose a new framework pack, the review will check it against the behavior rules it pairs with — not just *"does this Dockerfile build?"* but *"does emitting this pack's templates produce artifacts the constitution will accept?"* If a new framework introduces a delivery shape the existing rules don't cover (e.g., a language whose CI conventions don't fit `mvn test`/`pytest`/`npm test`-style invocations), propose the matching constitution rule update in the same design conversation — the pack alone is best-effort guidance; the pack + rule is enforcement with a recipe.
+
+The Rego namespace for behavior rules is internally `practice.*` (locked identifier; customer-facing label is **Behaviors**).
+
+---
+
 ## Contributing a new pack
 
 Priority order driven by customer signal — at the time of writing the most-requested-but-not-yet-shipped frameworks are:
