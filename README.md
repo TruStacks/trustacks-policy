@@ -54,6 +54,9 @@ trustacks-policy/
 ├── CODE_OF_CONDUCT.md           # Contributor Covenant 2.1
 ├── TRADEMARK.md                 # TruStacks trademark policy
 │
+├── standards/                   # meta-rules: how customer rules are shaped
+│   ├── README.md
+│   └── rule-naming.md           # rule_id grammar + reserved namespaces
 ├── frameworks/                  # framework knowledge packs
 │   └── README.md
 ├── ci-runtimes/                 # CI runtime packs
