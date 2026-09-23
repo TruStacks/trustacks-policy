@@ -1,0 +1,26 @@
+# Semgrep — SAST / SCA
+#
+# Profile category: sast_sca
+# Marketplace: https://github.com/marketplace/actions/semgrep
+#
+# Semgrep publishes their canonical action. The `semgrep ci` invocation
+# auto-detects the language + selects appropriate rule packs. Outputs
+# SARIF for upload to GitHub's code-scanning view.
+
+tool_name: semgrep
+display_name: Semgrep (semgrep/semgrep)
+profile_categories:
+  - sast_sca
+action: semgrep/semgrep@b6c8e8b4f9e8b4a5e8b4f9e8b4a5e8b4f9e8b4a5
+action_version_label: v1.95.0
+inputs:
+  config: auto
+  output_format: sarif
+  output_destination: semgrep.sarif
+notes: |
+  `config: auto` selects Semgrep's curated registry rules matching the
+  detected languages. Customers who need org-specific rule packs
+  override `config:` with a path to a checked-in `.semgrep.yml` or a
+  Semgrep Cloud rule-pack URL. SARIF output uploads cleanly via
+  `github/codeql-action/upload-sarif`.
+last_verified: "2026-05-05"

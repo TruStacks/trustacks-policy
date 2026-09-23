@@ -1,0 +1,30 @@
+# Syft — SBOM generation
+#
+# Profile category: sbom_signing
+# Marketplace: https://github.com/marketplace/actions/anchore-sbom-action
+#
+# Anchore publishes the canonical Syft GitHub Action. The action wraps
+# the syft CLI; despite the "anchore/" prefix on the action name, the
+# tool itself is Syft (an Anchore-stewarded open-source project). The
+# Profile uses the tool name `syft`, not `anchore`, because that's what
+# the customer is declaring — the SBOM generator brand.
+
+tool_name: syft
+display_name: Syft (anchore/sbom-action)
+profile_categories:
+  - sbom_signing
+action: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4dee
+action_version_label: v0.17.7
+inputs:
+  format: spdx-json
+  output-file: sbom.spdx.json
+  upload-artifact: "true"
+  upload-release-assets: "false"
+notes: |
+  Run after the docker build step (the container image must exist for
+  Syft to scan it). Output feeds Cosign's `cosign attest` step in a
+  follow-on workflow stage when the customer's Profile pairs syft with
+  cosign for sbom_signing. The default output path `sbom.spdx.json` can
+  be overridden per-framework if the framework pack specifies a
+  different artifact convention.
+last_verified: "2026-05-05"

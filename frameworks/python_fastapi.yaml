@@ -1,0 +1,110 @@
+framework: python_fastapi
+display_name: Python FastAPI
+language: python
+detection:
+  - file_present: [pyproject.toml]
+    file_content_contains:
+      - file: pyproject.toml
+        contains: fastapi
+  - file_present: [requirements.txt]
+    file_content_contains:
+      - file: requirements.txt
+        contains: fastapi
+prompt_addendum: |
+  This is a Python FastAPI project. The DevOps Engineer must emit a
+  Dockerfile that:
+    - uses an official `python:<runtime_version>-slim` base image,
+    - installs runtime deps from pyproject.toml (uv) or requirements.txt
+      (pip), pinning `--no-cache-dir` for pip,
+    - declares a non-root USER (1001 or app),
+    - ENTRYPOINT runs `uvicorn <app_module>:app --host 0.0.0.0`.
+  The CI workflow must run `pytest` (and `ruff check` if the project
+  uses ruff). The customer's Helm chart should use the existing
+  Helm template shape — no Python-specific deviation needed.
+dockerfile_template: |
+  # Reference Dockerfile for a Python FastAPI service.
+  # Adapt RUNTIME_VERSION + ENTRYPOINT to the customer's specific app.
+  FROM python:3.12-slim AS runtime
+
+  WORKDIR /app
+
+  # Install deps. Pin pip flags so layer caches behave.
+  COPY requirements.txt ./
+  RUN pip install --no-cache-dir -r requirements.txt
+
+  COPY . .
+
+  # Non-root identity required by practice.dockerfile_runs_as_nonroot.
+  RUN useradd --uid 1001 --create-home app
+  USER 1001
+
+  EXPOSE 8000
+  ENTRYPOINT ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ci_workflow_template: |
+  # Reference GitHub Actions workflow for a Python FastAPI service.
+  #
+  # REUSABLE, and deliberately so. This file is emitted into the *platform*
+  # repo — TruStacks has PR-write there and read-only on service repos
+  # (PROJECT_BRIEF.md, data plane). A called workflow runs in the CALLER's
+  # context, so `actions/checkout` below fetches the SERVICE's source, not
+  # the GitOps repo's. The service repo adds one small caller workflow once;
+  # your instructions carry the exact snippet to put in the PR body.
+  #
+  # Emitted as a standalone `on: pull_request` workflow this ran against the
+  # GitOps repo and failed every time (#374) — there is no service source
+  # there to test, and nothing ever built an image (#372).
+  #
+  # Name the file per service (`ci-<service>.yaml`); one platform repo holds
+  # every service in the Application and `ci.yaml` collides.
+  name: ci-<service>
+  on:
+    workflow_call:
+  jobs:
+    test:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+          with:
+            python-version: "3.12"
+        - run: pip install --no-cache-dir -r requirements.txt
+        - run: ruff check .
+        - run: pytest -q
+
+    # Produces the image the Helm values reference. Without this the chart
+    # points at a tag nothing ever pushed and the first sync sits in
+    # ImagePullBackOff (#372). Tagged with the caller's commit SHA —
+    # immutable, and it matches what the GitOps values.yaml pins.
+    build:
+      needs: test
+      runs-on: ubuntu-latest
+      permissions:
+        contents: read
+        packages: write
+      steps:
+        - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        # QEMU + the `platforms:` line below are what make the image runnable
+        # on arm64 nodes. `ubuntu-latest` is amd64, so without them buildx
+        # produces an amd64-only manifest and any arm64 node — Apple Silicon
+        # k3d, Graviton, Ampere — fails the pull with
+        # `no match for platform in manifest: not found`. That reads as a
+        # missing image and is not one.
+        - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+        - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        # GHCR needs no customer-managed secret — GITHUB_TOKEN plus the
+        # `packages: write` permission above is the whole auth story. For a
+        # different registry, swap `registry` and reference the credential
+        # the customer's Profile declares; do not invent a secret name.
+        - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+          with:
+            registry: ghcr.io
+            username: ${{ github.actor }}
+            password: ${{ secrets.GITHUB_TOKEN }}
+        - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+          with:
+            context: .
+            push: true
+            platforms: linux/amd64,linux/arm64
+            # Use the exact `image.repository` from the Image reference
+            # section of your instructions — never a name you construct.
+            tags: <image.repository>:${{ github.sha }}
