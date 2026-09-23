@@ -1,0 +1,139 @@
+framework: dotnet
+display_name: .NET (ASP.NET Core)
+language: csharp
+detection:
+  # Primary signal: any *.csproj file. Real-world .NET projects always
+  # have one. We don't require SDK-style content here so older
+  # `<Project>` formats still match — the agent reads the actual
+  # content to decide on dotnet runtime version.
+  - file_basename_glob: ["*.csproj"]
+  # F# projects.
+  - file_basename_glob: ["*.fsproj"]
+  # VB.NET — included for completeness; rare on the server side but
+  # cheap to support.
+  - file_basename_glob: ["*.vbproj"]
+  # global.json pins the SDK version. Customers without a *.proj at the
+  # repo root sometimes still ship one.
+  - file_present: [global.json]
+prompt_addendum: |
+  This is a .NET project (ASP.NET Core, .NET 8 or newer expected).
+  The DevOps Engineer must emit a multi-stage Dockerfile:
+    Stage 1 (build): `mcr.microsoft.com/dotnet/sdk:<version>` runs
+      `dotnet restore` (passing the *.csproj) followed by
+      `dotnet publish -c Release -o /app/publish --no-restore`. The
+      version comes from the customer's `<TargetFramework>` value
+      (e.g. `net8.0` → image tag `8.0`).
+    Stage 2 (runtime): `mcr.microsoft.com/dotnet/aspnet:<version>`
+      (smaller than the SDK image), copies `/app/publish` from the
+      build stage. Set `ASPNETCORE_URLS=http://+:8080` so Kestrel
+      listens on a known port. Declare a non-root USER (1001).
+      ENTRYPOINT is `["dotnet", "<AssemblyName>.dll"]` — the assembly
+      name typically matches the .csproj filename minus the extension.
+  CI workflow: `dotnet restore` + `dotnet build --no-restore` +
+  `dotnet test --no-build`. Cache the NuGet package directory
+  (`~/.nuget/packages`) between runs to keep CI fast.
+  Healthchecks: ASP.NET Core projects with the `Microsoft.AspNetCore.
+  Diagnostics.HealthChecks` package expose `/health`; the Helm chart's
+  liveness/readiness probes should target that path on port 8080.
+dockerfile_template: |
+  # Reference Dockerfile for an ASP.NET Core service. Adapt the
+  # framework version + assembly name to match the customer's
+  # *.csproj.
+  FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+  WORKDIR /workspace
+
+  # Restore as a separate layer so dependency changes don't bust the
+  # entire build cache.
+  COPY *.csproj ./
+  RUN dotnet restore
+
+  COPY . .
+  RUN dotnet publish -c Release -o /app/publish --no-restore
+
+  # Runtime stage — aspnet image is roughly half the size of the SDK.
+  FROM mcr.microsoft.com/dotnet/aspnet:8.0
+  WORKDIR /app
+  COPY --from=build /app/publish .
+
+  # Non-root identity required by practice.dockerfile_runs_as_nonroot.
+  RUN useradd --uid 1001 --create-home app
+  USER 1001
+
+  ENV ASPNETCORE_URLS=http://+:8080
+  EXPOSE 8080
+  ENTRYPOINT ["dotnet", "App.dll"]
+ci_workflow_template: |
+  # Reference GitHub Actions workflow for a ASP.NET Core service.
+  #
+  # REUSABLE, and deliberately so. This file is emitted into the *platform*
+  # repo — TruStacks has PR-write there and read-only on service repos
+  # (PROJECT_BRIEF.md, data plane). A called workflow runs in the CALLER's
+  # context, so `actions/checkout` below fetches the SERVICE's source, not
+  # the GitOps repo's. The service repo adds one small caller workflow once;
+  # your instructions carry the exact snippet to put in the PR body.
+  #
+  # Emitted as a standalone `on: pull_request` workflow this ran against the
+  # GitOps repo and failed every time (#374) — there is no service source
+  # there to test, and nothing ever built an image (#372).
+  #
+  # Name the file per service (`ci-<service>.yaml`); one platform repo holds
+  # every service in the Application and `ci.yaml` collides.
+  name: ci-<service>
+  on:
+    workflow_call:
+  jobs:
+    test:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+          with:
+            dotnet-version: "8.0.x"
+        - run: dotnet restore
+        # `dotnet format --verify-no-changes` is the canonical .NET
+        # lint/format step — ships with the SDK, no plugin install,
+        # fails with a non-zero exit if any file isn't formatted to the
+        # repo's .editorconfig + the C# language defaults. Matches the
+        # constitution's `practice.workflow_has_lint_step` accepted
+        # substring `dotnet format`.
+        - run: dotnet format --verify-no-changes
+        - run: dotnet build --no-restore --configuration Release
+        - run: dotnet test --no-build --configuration Release
+
+    # Produces the image the Helm values reference. Without this the chart
+    # points at a tag nothing ever pushed and the first sync sits in
+    # ImagePullBackOff (#372). Tagged with the caller's commit SHA —
+    # immutable, and it matches what the GitOps values.yaml pins.
+    build:
+      needs: test
+      runs-on: ubuntu-latest
+      permissions:
+        contents: read
+        packages: write
+      steps:
+        - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        # QEMU + the `platforms:` line below are what make the image runnable
+        # on arm64 nodes. `ubuntu-latest` is amd64, so without them buildx
+        # produces an amd64-only manifest and any arm64 node — Apple Silicon
+        # k3d, Graviton, Ampere — fails the pull with
+        # `no match for platform in manifest: not found`. That reads as a
+        # missing image and is not one.
+        - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+        - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        # GHCR needs no customer-managed secret — GITHUB_TOKEN plus the
+        # `packages: write` permission above is the whole auth story. For a
+        # different registry, swap `registry` and reference the credential
+        # the customer's Profile declares; do not invent a secret name.
+        - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+          with:
+            registry: ghcr.io
+            username: ${{ github.actor }}
+            password: ${{ secrets.GITHUB_TOKEN }}
+        - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+          with:
+            context: .
+            push: true
+            platforms: linux/amd64,linux/arm64
+            # Use the exact `image.repository` from the Image reference
+            # section of your instructions — never a name you construct.
+            tags: <image.repository>:${{ github.sha }}
