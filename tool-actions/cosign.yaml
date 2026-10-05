@@ -1,0 +1,29 @@
+# Cosign — artifact signing
+#
+# Profile category: sbom_signing (also commonly used for image signing,
+# which Profile-side falls under sbom_signing's umbrella today)
+# Marketplace: https://github.com/marketplace/actions/install-cosign
+#
+# Sigstore publishes cosign-installer which puts the cosign CLI on PATH;
+# the actual `cosign sign` / `cosign attest` invocation is then a
+# `run:` step in the workflow. The agent emits BOTH the installer step
+# (using this pack's action+SHA) and a follow-on run step that calls
+# the cosign CLI with framework-appropriate arguments.
+
+tool_name: cosign
+display_name: Cosign (sigstore/cosign-installer)
+profile_categories:
+  - sbom_signing
+action: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8c6d3d9f6b7ce08e0c71f
+action_version_label: v3.7.0
+inputs:
+  cosign-release: v2.4.1
+notes: |
+  Installs the cosign CLI on PATH. The agent emits a follow-on `run:`
+  step that calls `cosign sign-blob` (for SBOMs and other artifacts)
+  or `cosign sign` (for container images), depending on what the
+  framework pack's CI workflow shape is generating. Keyless OIDC
+  signing is preferred (`COSIGN_EXPERIMENTAL=1`) when the workflow
+  runs on github.com hosted runners; private/self-hosted runners may
+  need explicit key configuration.
+last_verified: "2026-05-05"

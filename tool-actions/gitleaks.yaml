@@ -1,0 +1,25 @@
+# Gitleaks — secret scanning
+#
+# Profile category: secret_scanning
+# Marketplace: https://github.com/marketplace/actions/gitleaks
+#
+# The Gitleaks org publishes its own GitHub Action. Scans the
+# repository's git history for committed secrets. Runs on push/PR
+# events; the default config catches the most common credential
+# leak patterns out of the box.
+
+tool_name: gitleaks
+display_name: Gitleaks (gitleaks/gitleaks-action)
+profile_categories:
+  - secret_scanning
+action: gitleaks/gitleaks-action@e44f7bf03d1bbf21f3b4b02b94cd0b5e5cdb5fcd
+action_version_label: v2.3.6
+inputs: {}
+notes: |
+  Requires `GITHUB_TOKEN` (provided automatically by GitHub Actions).
+  The free tier blocks scanning private repos without a Gitleaks
+  Cloud license — the action surfaces a clear error if invoked on a
+  private repo without `GITLEAKS_LICENSE` set. For the Beta target
+  customer (regulated mid-market with private repos), the customer
+  needs a Gitleaks license configured as a repo secret.
+last_verified: "2026-05-05"

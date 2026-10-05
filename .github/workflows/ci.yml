@@ -1,0 +1,125 @@
+# CI for the open policy content.
+#
+# Three things are checked, and the third is the one that matters most:
+#
+#   1. the constitution's own rego tests pass
+#   2. every framework pack's canonical CI workflow survives the constitution
+#      — a pack and the rule it claims to satisfy cannot drift apart in silence
+#   3. `compliance-overlays/` stays empty — paid content must not land here
+#
+# The OPA version is pinned to the one the product repo builds and signs the
+# shipped bundle with. Testing the constitution on a different evaluator than
+# we sign is a gap, not a convenience.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  OPA_VERSION: v0.69.0
+
+jobs:
+  rego:
+    name: constitution — rego tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # `--retry-all-errors` because this download has failed mid-transfer
+      # before (curl exit 56), turning a doc-only PR red for a reason that had
+      # nothing to do with the diff. A check that goes red for unrelated
+      # reasons is how people learn to skim past it.
+      - name: Install OPA
+        run: |
+          curl -fsSL -o /tmp/opa \
+            --retry 5 --retry-delay 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 120 \
+            "https://openpolicyagent.org/downloads/${OPA_VERSION}/opa_linux_amd64_static"
+          chmod +x /tmp/opa
+
+      - name: Run the constitution tests
+        run: /tmp/opa test constitution
+
+  lockstep:
+    name: packs ⟷ constitution lockstep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install OPA
+        run: |
+          curl -fsSL -o /usr/local/bin/opa \
+            --retry 5 --retry-delay 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 120 \
+            "https://openpolicyagent.org/downloads/${OPA_VERSION}/opa_linux_amd64_static"
+          chmod +x /usr/local/bin/opa
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      # The test skips itself when `opa` is absent, so a missing binary would
+      # read as a pass. Prove the binary is there before trusting the result.
+      - name: Prove OPA is present
+        run: opa version
+
+      - name: Run the lockstep suite
+        run: uv run --with pytest --with pyyaml pytest tests -q
+
+  boundary:
+    name: open-core boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # ADR-0013 puts regulatory packs (SOC2 / HIPAA / PCI / FedRAMP / ITIL) in
+      # the paid, vendor-curated column. `compliance-overlays/` exists here to
+      # say so and to hold the explanation — not to hold rules. A README is the
+      # only file permitted.
+      #
+      # This is the one boundary in the split that cannot be undone: content
+      # published under Apache 2.0 stays published.
+      - name: compliance-overlays holds no rules
+        run: |
+          unexpected="$(find compliance-overlays -type f ! -name 'README.md' -print)"
+          if [ -n "$unexpected" ]; then
+            echo "::error::Paid compliance content must not land in this repository:"
+            echo "$unexpected"
+            exit 1
+          fi
+          echo "compliance-overlays/ holds only its README, as ADR-0013 requires."
+
+  dco:
+    name: DCO sign-off
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      # CONTRIBUTING.md requires `git commit -s` on every commit and says so to
+      # every contributor. Until now nothing checked it, which is the same
+      # presence-versus-enforcement gap ADR-0038 names about policy itself.
+      - name: Every commit carries a Signed-off-by line
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          while read -r sha; do
+            [ -z "$sha" ] && continue
+            if ! git log -1 --format='%B' "$sha" | grep -qiE '^Signed-off-by: .+ <.+@.+>'; then
+              echo "::error::missing Signed-off-by: $(git log -1 --format='%h %s' "$sha")"
+              missing=1
+            fi
+          done <<< "$(git rev-list "$BASE".."$HEAD")"
+          if [ "$missing" -ne 0 ]; then
+            echo "Add sign-off with: git commit -s  (or: git rebase --signoff $BASE)"
+            exit 1
+          fi
+          echo "All commits signed off."

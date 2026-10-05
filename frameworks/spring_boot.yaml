@@ -1,0 +1,148 @@
+framework: spring_boot
+display_name: Spring Boot
+language: java
+detection:
+  # Maven projects: pom.xml present + the spring-boot artifact in the
+  # parent POM or among dependencies.
+  - file_present: [pom.xml]
+    file_content_contains:
+      - file: pom.xml
+        contains: spring-boot
+  # Gradle Groovy DSL.
+  - file_present: [build.gradle]
+    file_content_contains:
+      - file: build.gradle
+        contains: org.springframework.boot
+  # Gradle Kotlin DSL.
+  - file_present: [build.gradle.kts]
+    file_content_contains:
+      - file: build.gradle.kts
+        contains: org.springframework.boot
+prompt_addendum: |
+  This is a Spring Boot project. The DevOps Engineer must emit a
+  multi-stage Dockerfile:
+    Stage 1 (build):
+      For Maven projects, use `maven:3.9-eclipse-temurin-<jdk>` —
+        it ships Maven + JDK; `eclipse-temurin:<jdk>-jdk` does NOT
+        include Maven and `mvn` will be missing on PATH.
+      For Gradle wrapper projects, `eclipse-temurin:<jdk>-jdk` is
+        fine — `./gradlew` bootstraps Gradle itself.
+      The build runs `mvn -B package -DskipTests` for Maven,
+        `./gradlew bootJar` for Gradle.
+      JDK version pulled from the customer's POM/Gradle config
+        (look for `<java.version>` in pom.xml or `targetCompatibility`
+        / `JavaLanguageVersion.of(...)` in Gradle).
+    Stage 2 (runtime): `eclipse-temurin:<jdk>-jre` (smaller image),
+      copies `target/*.jar` from the build stage to /app.jar.
+    The runtime stage MUST declare a non-root USER (typically 1001).
+    ENTRYPOINT is `java -jar /app.jar`.
+  The CI workflow must run `mvn -B test` (Maven) or `./gradlew test`
+  (Gradle). Cache the local Maven repo or Gradle dependencies between
+  runs to keep CI fast.
+  Healthchecks: Spring Boot exposes `/actuator/health` when the
+  Actuator dependency is on the classpath; the Helm chart's probes
+  should target that path on the configured server port (default 8080).
+dockerfile_template: |
+  # Reference Dockerfile for a Spring Boot (Maven) service. Adapt the
+  # JDK version + JAR name to match what the customer's pom.xml / build
+  # actually produces. For Gradle wrapper projects, swap the build base
+  # to `eclipse-temurin:21-jdk` and drive with `./gradlew bootJar`.
+  FROM maven:3.9-eclipse-temurin-21 AS build
+  WORKDIR /workspace
+
+  # Copy POM first to allow dependency layer caching.
+  COPY pom.xml ./
+  RUN --mount=type=cache,target=/root/.m2 mvn -B dependency:go-offline
+
+  COPY src ./src
+  RUN --mount=type=cache,target=/root/.m2 mvn -B package -DskipTests
+
+  # Runtime stage — JRE only, smaller surface.
+  FROM eclipse-temurin:21-jre
+
+  WORKDIR /app
+  COPY --from=build /workspace/target/*.jar /app/app.jar
+
+  # Non-root identity required by practice.dockerfile_runs_as_nonroot.
+  RUN useradd --uid 1001 --create-home app
+  USER 1001
+
+  EXPOSE 8080
+  ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+ci_workflow_template: |
+  # Reference GitHub Actions workflow for a Spring Boot (Maven) service.
+  #
+  # REUSABLE, and deliberately so. This file is emitted into the *platform*
+  # repo — TruStacks has PR-write there and read-only on service repos
+  # (PROJECT_BRIEF.md, data plane). A called workflow runs in the CALLER's
+  # context, so `actions/checkout` below fetches the SERVICE's source, not
+  # the GitOps repo's. The service repo adds one small caller workflow once;
+  # your instructions carry the exact snippet to put in the PR body.
+  #
+  # Emitted as a standalone `on: pull_request` workflow this ran against the
+  # GitOps repo and failed every time (#374) — there is no service source
+  # there to test, and nothing ever built an image (#372).
+  #
+  # Name the file per service (`ci-<service>.yaml`); one platform repo holds
+  # every service in the Application and `ci.yaml` collides.
+  name: ci-<service>
+  on:
+    workflow_call:
+  jobs:
+    test:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        - uses: actions/setup-java@7a6d8a8234af8eb26422e24e3006232cccaa061b
+          with:
+            distribution: temurin
+            java-version: "21"
+            cache: maven
+        # `mvn -B verify -Dlint=true` runs Maven's verify lifecycle
+        # (which includes test) plus any lint plugins the customer's
+        # pom.xml gates on `${lint}` (Checkstyle / SpotBugs / PMD).
+        # Maven ignores unknown -D properties, so the flag is harmless
+        # if the customer's pom.xml doesn't reference `${lint}` —
+        # production users with a configured plugin get lint enforcement
+        # on every CI run; demo users get a working test pipeline.
+        # Matches the constitution's `practice.workflow_has_lint_step`
+        # accepted substring `mvn -B verify -Dlint`.
+        - run: mvn -B verify -Dlint=true
+
+    # Produces the image the Helm values reference. Without this the chart
+    # points at a tag nothing ever pushed and the first sync sits in
+    # ImagePullBackOff (#372). Tagged with the caller's commit SHA —
+    # immutable, and it matches what the GitOps values.yaml pins.
+    build:
+      needs: test
+      runs-on: ubuntu-latest
+      permissions:
+        contents: read
+        packages: write
+      steps:
+        - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        # QEMU + the `platforms:` line below are what make the image runnable
+        # on arm64 nodes. `ubuntu-latest` is amd64, so without them buildx
+        # produces an amd64-only manifest and any arm64 node — Apple Silicon
+        # k3d, Graviton, Ampere — fails the pull with
+        # `no match for platform in manifest: not found`. That reads as a
+        # missing image and is not one.
+        - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+        - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        # GHCR needs no customer-managed secret — GITHUB_TOKEN plus the
+        # `packages: write` permission above is the whole auth story. For a
+        # different registry, swap `registry` and reference the credential
+        # the customer's Profile declares; do not invent a secret name.
+        - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+          with:
+            registry: ghcr.io
+            username: ${{ github.actor }}
+            password: ${{ secrets.GITHUB_TOKEN }}
+        - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+          with:
+            context: .
+            push: true
+            platforms: linux/amd64,linux/arm64
+            # Use the exact `image.repository` from the Image reference
+            # section of your instructions — never a name you construct.
+            tags: <image.repository>:${{ github.sha }}

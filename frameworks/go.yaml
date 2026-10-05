@@ -1,0 +1,118 @@
+framework: go
+display_name: Go
+language: go
+detection:
+  # `go.mod` is the canonical Go-modules signal. Every modern Go
+  # project has one; pre-modules projects ("GOPATH style") are rare
+  # in the regulated-customer segment we target and not worth a
+  # second detection rule.
+  - file_present: [go.mod]
+prompt_addendum: |
+  This is a Go project. The DevOps Engineer must emit a multi-stage
+  Dockerfile:
+    Stage 1 (build): `golang:<runtime_version>` runs `go build` (or
+      `go build -trimpath -ldflags="-s -w"` for a stripped binary).
+      Set `CGO_ENABLED=0` so the resulting binary is statically
+      linked and runs on a distroless / scratch base. The Go
+      version comes from the customer's `go.mod` (`go <version>`
+      directive at the top).
+    Stage 2 (runtime): `gcr.io/distroless/static:nonroot` —
+      tiny image (~2 MB), no shell, no package manager, runs as
+      uid 65532 by default. Copy the built binary in and set
+      ENTRYPOINT to it.
+  CI workflow: `go test ./...` (covers every package). Cache the
+  module download directory (`~/go/pkg/mod`) between runs.
+  Healthchecks: Go services typically expose `/healthz` or `/ready`
+  via the standard `net/http` mux; the Helm chart's probes target
+  that path on the configured port (commonly 8080).
+dockerfile_template: |
+  # Reference Dockerfile for a Go service. Adapt the Go version + the
+  # main package path (./cmd/<svc>) + the binary name to match the
+  # customer's go.mod and main package layout.
+  FROM golang:1.23 AS build
+  WORKDIR /workspace
+
+  # Restore as a separate layer so module changes don't bust the build cache.
+  COPY go.mod go.sum ./
+  RUN go mod download
+
+  COPY . .
+  ENV CGO_ENABLED=0 GOOS=linux
+  RUN go build -trimpath -ldflags="-s -w" -o /app/server .
+
+  # Runtime stage — distroless static, ~2 MB, runs as uid 65532
+  # (`nonroot`) by default. No need for an explicit USER directive.
+  FROM gcr.io/distroless/static:nonroot
+  WORKDIR /app
+  COPY --from=build /app/server /app/server
+
+  EXPOSE 8080
+  ENTRYPOINT ["/app/server"]
+ci_workflow_template: |
+  # Reference GitHub Actions workflow for a Go service.
+  #
+  # REUSABLE, and deliberately so. This file is emitted into the *platform*
+  # repo — TruStacks has PR-write there and read-only on service repos
+  # (PROJECT_BRIEF.md, data plane). A called workflow runs in the CALLER's
+  # context, so `actions/checkout` below fetches the SERVICE's source, not
+  # the GitOps repo's. The service repo adds one small caller workflow once;
+  # your instructions carry the exact snippet to put in the PR body.
+  #
+  # Emitted as a standalone `on: pull_request` workflow this ran against the
+  # GitOps repo and failed every time (#374) — there is no service source
+  # there to test, and nothing ever built an image (#372).
+  #
+  # Name the file per service (`ci-<service>.yaml`); one platform repo holds
+  # every service in the Application and `ci.yaml` collides.
+  name: ci-<service>
+  on:
+    workflow_call:
+  jobs:
+    test:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+          with:
+            go-version: "1.23"
+            cache: true
+        - run: go vet ./...
+        - run: go test -race ./...
+
+    # Produces the image the Helm values reference. Without this the chart
+    # points at a tag nothing ever pushed and the first sync sits in
+    # ImagePullBackOff (#372). Tagged with the caller's commit SHA —
+    # immutable, and it matches what the GitOps values.yaml pins.
+    build:
+      needs: test
+      runs-on: ubuntu-latest
+      permissions:
+        contents: read
+        packages: write
+      steps:
+        - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        # QEMU + the `platforms:` line below are what make the image runnable
+        # on arm64 nodes. `ubuntu-latest` is amd64, so without them buildx
+        # produces an amd64-only manifest and any arm64 node — Apple Silicon
+        # k3d, Graviton, Ampere — fails the pull with
+        # `no match for platform in manifest: not found`. That reads as a
+        # missing image and is not one.
+        - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+        - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        # GHCR needs no customer-managed secret — GITHUB_TOKEN plus the
+        # `packages: write` permission above is the whole auth story. For a
+        # different registry, swap `registry` and reference the credential
+        # the customer's Profile declares; do not invent a secret name.
+        - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+          with:
+            registry: ghcr.io
+            username: ${{ github.actor }}
+            password: ${{ secrets.GITHUB_TOKEN }}
+        - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+          with:
+            context: .
+            push: true
+            platforms: linux/amd64,linux/arm64
+            # Use the exact `image.repository` from the Image reference
+            # section of your instructions — never a name you construct.
+            tags: <image.repository>:${{ github.sha }}
