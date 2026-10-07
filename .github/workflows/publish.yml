@@ -134,7 +134,8 @@ jobs:
       - name: Sign (keyless)
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
-        run: "$RUNNER_TEMP/cosign" sign --yes "${IMAGE}@${DIGEST}"
+        run: |
+          "$RUNNER_TEMP/cosign" sign --yes "${IMAGE}@${DIGEST}"
 
       # Verify exactly as a customer would, so a signature that cannot be
       # verified fails the release instead of a customer's runner.
