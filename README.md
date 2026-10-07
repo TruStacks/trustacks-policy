@@ -56,7 +56,7 @@ trustacks-policy/
 │
 ├── constitution/                # the universal rules every proposal respects
 │   ├── README.md
-│   ├── proposal.rego            # 11 rule_ids: proposal.* shape + practice.*
+│   ├── proposal.rego            # 16 rule_ids: proposal.*, argocd.*, practice.*, posture.*
 │   ├── proposal_test.rego
 │   ├── overlay_naming.rego      # the naming gate for customer overlay rules
 │   └── overlay_naming_test.rego
@@ -70,6 +70,9 @@ trustacks-policy/
 │   ├── README.md
 │   ├── CURATION.md
 │   └── {trivy,semgrep,gitleaks,syft,cosign}.yaml
+├── renderers/                   # deploy-artifact layout per renderer
+│   ├── README.md
+│   └── {helm,kustomize}.yaml
 ├── tests/                       # the packs <-> constitution lockstep suite
 ├── ci-runtimes/                 # CI runtime packs
 │   └── README.md
@@ -85,7 +88,7 @@ Each subdirectory's README explains what that layer is, what shape contributions
 
 ## Status
 
-**Public, and holding real content as of 2026-09-23.** The constitution, the four framework packs and the five tool-action packs now live here, with CI that runs the rego tests and — the part that matters — evaluates **every framework pack's canonical CI workflow against the constitution on every PR**, so a rule and the pack that claims to satisfy it cannot drift apart in silence.
+**Public, and holding real content as of 2026-09-23.** The constitution, the four framework packs, the five tool-action packs and the two renderer packs now live here, with CI that runs the rego tests and — the part that matters — evaluates **every framework pack's canonical CI workflow against the constitution on every PR**, so a rule and the pack that claims to satisfy it cannot drift apart in silence.
 
 Still stubs, with their READMEs explaining the shape a contribution takes: `ci-runtimes/`, `industry-overlays/`. `compliance-overlays/` is empty **by design** — regulatory packs (SOC2, HIPAA, PCI, FedRAMP, ITIL) are TruStacks-curated paid content, and CI fails if a rule lands there.
 

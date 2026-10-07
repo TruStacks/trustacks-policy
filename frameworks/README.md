@@ -6,15 +6,11 @@ This directory is the open-source home for community-contributed framework packs
 
 ---
 
-## Status — bootstrap
+## Status
 
-This directory is **empty by design** as of repository bootstrap. Framework packs currently ship inside the TruStacks runner image (see `packs/frameworks/` in the [trustacks-mvp](https://github.com/TruStacks/trustacks-mvp) repo). The four packs that ship today — `python_fastapi`, `spring_boot`, `dotnet`, `go` — will migrate here at the start of the open-core distribution arc (Phase 5.2 of the TruStacks roadmap).
+The four packs the product ships — `python_fastapi`, `spring_boot`, `dotnet`, `go` — live here, and CI evaluates each pack's canonical workflow against the constitution on every PR (`tests/`). Until the policy build moves to this repo, the product still ships its own copy inside the runner image, so a change here needs the matching change there.
 
-The reference shape of a pack lives at:
-
-> https://github.com/TruStacks/trustacks-mvp/blob/main/packs/frameworks/python_fastapi.yaml
-
-Read that file before designing a new pack. The YAML schema is also documented in the runner-side loader at `runner/src/trustacks_runner/frameworks/models.py` in the same product repo.
+Read an existing pack, e.g. [`python_fastapi.yaml`](python_fastapi.yaml), before designing a new one.
 
 ---
 
@@ -57,7 +53,7 @@ Priority order driven by customer signal — at the time of writing the most-req
 If you want to contribute one, read `CONTRIBUTING.md` at the repo root for the DCO + PR flow, then:
 
 1. Open a GitHub issue with the `discussion` label first. Tell us what framework you want to pack and what the canonical Dockerfile + CI workflow shape is. We'll respond with design feedback before you sink time into the YAML.
-2. Once design is aligned, draft `frameworks/<framework-id>.yaml`. Use `python_fastapi.yaml` (in trustacks-mvp) as the structural template.
+2. Once design is aligned, draft `frameworks/<framework-id>.yaml`. Use [`python_fastapi.yaml`](python_fastapi.yaml) in this directory as the structural template.
 3. If the pack benefits from a worked example, add a minimal sample app under `frameworks/<framework-id>/sample/`. Sample apps must be small (single file is ideal); they exist to anchor the pack, not demonstrate the framework.
 4. Submit the PR with DCO sign-off and the design rationale in the PR description.
 

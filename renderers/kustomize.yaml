@@ -1,0 +1,51 @@
+# Kustomize renderer pack (ADR-0052 decisions 2 and 5).
+#
+# Shaped against a real customer's platform repo rather than an invented one:
+# services under a shared root, each with a `base/` and one overlay per
+# environment, and the ArgoCD Application pointing at the overlay.
+#
+# The nesting is the inverse of Helm's on purpose. Our Helm layout puts the
+# cluster ABOVE the service, so every cluster gets a complete independent copy —
+# correct for a chart plus per-cluster values, and for Kustomize it would
+# produce N duplicated bases, which is exactly what base-plus-overlays exists to
+# abolish.
+renderer: kustomize
+display_name: Kustomize
+
+# No `{cluster}`: the cluster is an overlay BELOW the service root. A
+# per-cluster root would duplicate the base it exists to share, and the
+# Application-level validator rejects one.
+default_root_template: gitops/{application}/{service}
+
+# Paths are relative to the resolved service root. `{cluster}` in a path is
+# substituted per target cluster, so an Application with three clusters emits
+# one base and three overlays rather than three of everything.
+files:
+  - path: base/kustomization.yaml
+    purpose: lists the base resources — no namespace, no image tag
+  - path: base/deployment.yaml
+    purpose: the Deployment, with the image left for the overlay to set
+  - path: base/service.yaml
+    purpose: the ClusterIP Service
+  - path: overlays/{cluster}/kustomization.yaml
+    purpose: >-
+      references ../../base, sets namespace, and pins the image tag via
+      `images:` — the per-environment difference, and the only place a tag
+      appears
+
+# What the ArgoCD Application points at.
+argocd:
+  # ArgoCD syncs the OVERLAY, not the service root: the base alone has no
+  # namespace and no image tag, so syncing it would deploy something nobody
+  # asked for.
+  source_path: overlays/{cluster}
+  # No release name, and no `helm:` block at all — which removes the field that
+  # broke the java-dogfood run (#542).
+  release_name: false
+
+# The pre-emit counterpart of `helm template` (ADR-0038 / ADR-0052 decision 7).
+# Run against the overlay for the same reason ArgoCD points there: building the
+# base proves less than building what actually gets applied.
+validation:
+  command: kustomize
+  args: [build]
