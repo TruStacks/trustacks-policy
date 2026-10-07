@@ -1,0 +1,43 @@
+# Helm renderer pack (ADR-0052 decision 5).
+#
+# The canonical deploy-artifact shape for `renderer: helm`. Unchanged from what
+# the DevOps Engineer has always emitted — written down here rather than left in
+# prose so the Kustomize pack has a sibling to be symmetrical with, and so a
+# future renderer is a file rather than a branch.
+renderer: helm
+display_name: Helm
+
+# Where the service's artifacts live, relative to the platform repo root. The
+# Application may override this (ADR-0052 decision 8); `{cluster}` is required
+# for helm, because each cluster gets a full chart of its own and without it the
+# second cluster would overwrite the first.
+default_root_template: gitops/{application}/{cluster}/{service}
+
+# Every file, relative to the resolved service root. The agent emits exactly
+# these — no `_helpers.tpl`, which is why the system prompt forbids `include`
+# of a named helper: `helm create` scaffolds helpers this chart does not carry,
+# and reaching for one from memory produces a chart that cannot render (#356).
+files:
+  - path: Chart.yaml
+    purpose: chart metadata — name, apiVersion v2, appVersion
+  - path: values.yaml
+    purpose: image repository + tag, replica count, service port
+  - path: templates/deployment.yaml
+    purpose: the Deployment, referencing .Values.image
+  - path: templates/service.yaml
+    purpose: the ClusterIP Service
+
+# What the ArgoCD Application points at, and what it must carry.
+argocd:
+  # Relative to the service root: helm renders the chart in place.
+  source_path: ""
+  # Helm needs a release name; it is a DNS subdomain capped at 53 characters,
+  # stricter than the 63 of an RFC 1123 label. `spring_boot` failed here (#542).
+  release_name: true
+
+# The pre-emit check that proves the artifacts work (ADR-0038).
+validation:
+  command: helm
+  # Rendered with a fixed release name: deriving one from the temp directory
+  # injected underscores and made every chart look broken.
+  args: [template, ".", --name-template, trustacks-validate]

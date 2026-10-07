@@ -6,15 +6,11 @@ This directory is the open-source home for community-contributed framework packs
 
 ---
 
-## Status — bootstrap
+## Status
 
-This directory is **empty by design** as of repository bootstrap. Framework packs currently ship inside the TruStacks runner image (see `packs/frameworks/` in the [trustacks-mvp](https://github.com/TruStacks/trustacks-mvp) repo). The four packs that ship today — `python_fastapi`, `spring_boot`, `dotnet`, `go` — will migrate here at the start of the open-core distribution arc (Phase 5.2 of the TruStacks roadmap).
+The four packs the product ships — `python_fastapi`, `spring_boot`, `dotnet`, `go` — live here, and CI evaluates each pack's canonical workflow against the constitution on every PR (`tests/`). Until the policy build moves to this repo, the product still ships its own copy inside the runner image, so a change here needs the matching change there.
 
-The reference shape of a pack lives at:
-
-> https://github.com/TruStacks/trustacks-mvp/blob/main/packs/frameworks/python_fastapi.yaml
-
-Read that file before designing a new pack. The YAML schema is also documented in the runner-side loader at `runner/src/trustacks_runner/frameworks/models.py` in the same product repo.
+Read an existing pack, e.g. [`python_fastapi.yaml`](python_fastapi.yaml), before designing a new one.
 
 ---
 
