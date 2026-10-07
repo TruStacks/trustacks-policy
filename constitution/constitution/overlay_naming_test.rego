@@ -9,8 +9,16 @@ import rego.v1
 
 naming_data := {
 	"rule_id_pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
-	"reserved_namespaces": ["argocd", "constitution", "proposal", "trustacks"],
+	"reserved_namespaces": ["argocd", "constitution", "posture", "practice", "proposal", "trustacks"],
 	"max_rule_id_length": 64,
+	"version": 2,
+}
+
+# The stand-in above must be what actually ships. `opa test` loads the real
+# data.naming.json beside these files, so compare the two: a stand-in that
+# drifted from the sidecar would test a standard nobody enforces.
+test_stand_in_matches_the_shipped_sidecar if {
+	data.naming == naming_data
 }
 
 # ---- Valid rule_ids: no denies -----------------------------------------
@@ -59,6 +67,23 @@ test_reserved_namespace_proposal_denies if {
 
 test_reserved_namespace_constitution_denies if {
 	input_doc := {"overlay": {"rules": {"constitution.foo": {}}}}
+	some msg in overlay_rule_naming.deny with data.naming as naming_data with input as input_doc
+	msg.rule_id == "constitution.overlay_rule_naming.reserved"
+}
+
+# Standard v2: every constitution directory is a reserved namespace. Before
+# v2 the constitution shipped `practice.*` and `posture.*` rules without
+# reserving either, so an overlay could have claimed `practice.foo` and had it
+# read as a TruStacks-shipped practice rule.
+
+test_reserved_namespace_practice_denies if {
+	input_doc := {"overlay": {"rules": {"practice.requires_runbook_link": {}}}}
+	some msg in overlay_rule_naming.deny with data.naming as naming_data with input as input_doc
+	msg.rule_id == "constitution.overlay_rule_naming.reserved"
+}
+
+test_reserved_namespace_posture_denies if {
+	input_doc := {"overlay": {"rules": {"posture.vault_declared": {}}}}
 	some msg in overlay_rule_naming.deny with data.naming as naming_data with input as input_doc
 	msg.rule_id == "constitution.overlay_rule_naming.reserved"
 }

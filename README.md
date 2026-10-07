@@ -55,12 +55,13 @@ trustacks-policy/
 ├── TRADEMARK.md                 # TruStacks trademark policy
 │
 ├── constitution/                # the universal rules every proposal respects
-│   ├── README.md
-│   ├── proposal.rego            # 16 rule_ids: proposal.*, argocd.*, practice.*, posture.*
-│   ├── proposal_test.rego
-│   ├── overlay_naming.rego      # the naming gate for customer overlay rules
-│   ├── data.naming.json         # the naming grammar the gate reads
-│   └── overlay_naming_test.rego
+│   ├── README.md                #   one file per rule; the directory is the namespace
+│   ├── proposal/                # proposal.*  — shape + safety of the change (+ lib.rego)
+│   ├── argocd/                  # argocd.*    — repoURL_is_canonical
+│   ├── practice/                # practice.*  — delivery behaviours (+ lib.rego)
+│   ├── posture/                 # posture.*   — declared tooling, scored, never a deny
+│   ├── constitution/            # constitution.* — the naming gate for overlay rules
+│   └── data.naming.json         # the naming grammar the gate reads
 ├── standards/                   # meta-rules: how customer rules are shaped
 │   ├── README.md
 │   └── rule-naming.md           # rule_id grammar + reserved namespaces

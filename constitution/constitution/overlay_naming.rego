@@ -1,9 +1,12 @@
 # Constitution: customer-overlay rule-naming standard (ADR-0023, layer A4).
 #
-# This rule is distinct from the proposal-eval rules in `proposal.rego`:
-# it operates on a customer's *overlay rule_metadata*, not on a
-# platform-repo proposal. The package is `constitution.overlay_rule_naming`
-# so the input shape is unambiguous from a quick eyeball:
+# This rule is distinct from the proposal-eval rules (`package proposal`,
+# under proposal/, argocd/, practice/ and posture/): it operates on a
+# customer's *overlay rule_metadata*, not on a platform-repo proposal. It
+# lives in constitution/ because the rules it emits are in the
+# `constitution.` namespace — the directory names the namespace (rule-naming
+# standard v2). The package is `constitution.overlay_rule_naming` so the
+# input shape is unambiguous from a quick eyeball:
 #
 #   input = {
 #     "overlay": {
@@ -21,9 +24,13 @@
 #
 #   data.naming = {
 #     "rule_id_pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
-#     "reserved_namespaces": ["argocd", "constitution", "proposal", "trustacks"],
-#     "max_rule_id_length": 64
+#     "reserved_namespaces": ["argocd", "constitution", "posture", "practice", "proposal", "trustacks"],
+#     "max_rule_id_length": 64,
+#     "version": 2
 #   }
+#
+# The reserved set is every directory under the constitution, plus
+# `trustacks` (rule-naming standard v2).
 #
 # That sidecar is the only place the regex string lives in this bundle;
 # the rule body never hardcodes it. A CI lockstep test asserts that
