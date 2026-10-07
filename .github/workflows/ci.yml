@@ -45,6 +45,16 @@ jobs:
       - name: Run the constitution tests
         run: /tmp/opa test constitution
 
+      # The same build publish.yml runs on a tag, minus the push. Without this
+      # the inventory builder is only ever exercised at release time, and a
+      # bundle that lists zero rules is the failure #600 shipped silently.
+      - name: Build the bundle exactly as a release would
+        run: |
+          export PATH="/tmp:$PATH"
+          python3 scripts/build_inventory.py --source constitution \
+            --out .build/rule_inventory.json --label constitution
+          opa build -b constitution -o bundle.tar.gz
+
   lockstep:
     name: packs ⟷ constitution lockstep
     runs-on: ubuntu-latest

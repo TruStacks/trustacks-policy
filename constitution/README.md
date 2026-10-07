@@ -18,16 +18,22 @@ is weaker, not stronger, if the deciding half is a black box.
 | `proposal_test.rego` | their tests |
 | `overlay_naming.rego` | the rule-naming gate for customer-authored overlay rules (see `../standards/rule-naming.md`) |
 | `overlay_naming_test.rego` | its tests |
+| `data.naming.json` | the rule-naming grammar the naming gate reads (`data.naming.*`) |
 
-Eleven `rule_id`s ship today, in two families:
+Sixteen `rule_id`s ship today, in four families:
 
 - **`proposal.*`** — shape and safety of the change itself: `allowed_paths`,
   `no_path_traversal`, `has_workflow`, `has_helm_chart`, `has_kustomization`,
   `has_argocd_application`.
+- **`argocd.*`** — `repoURL_is_canonical`: an emitted ArgoCD Application points
+  at the platform repo it was written to.
 - **`practice.*`** — the delivery behaviours a proposal must demonstrate:
   `workflow_has_test_step`, `workflow_has_lint_step`,
   `workflow_pins_action_versions`, `dockerfile_runs_as_nonroot`,
   `argocd_prod_requires_manual_sync`.
+- **`posture.*`** — declared tooling, scored but never a deny:
+  `image_scanning_declared`, `sast_sca_declared`, `secret_scanning_declared`,
+  `sbom_signing_declared`.
 
 ## Running the tests
 
