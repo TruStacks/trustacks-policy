@@ -53,7 +53,7 @@ Priority order driven by customer signal — at the time of writing the most-req
 If you want to contribute one, read `CONTRIBUTING.md` at the repo root for the DCO + PR flow, then:
 
 1. Open a GitHub issue with the `discussion` label first. Tell us what framework you want to pack and what the canonical Dockerfile + CI workflow shape is. We'll respond with design feedback before you sink time into the YAML.
-2. Once design is aligned, draft `frameworks/<framework-id>.yaml`. Use `python_fastapi.yaml` (in trustacks-mvp) as the structural template.
+2. Once design is aligned, draft `frameworks/<framework-id>.yaml`. Use [`python_fastapi.yaml`](python_fastapi.yaml) in this directory as the structural template.
 3. If the pack benefits from a worked example, add a minimal sample app under `frameworks/<framework-id>/sample/`. Sample apps must be small (single file is ideal); they exist to anchor the pack, not demonstrate the framework.
 4. Submit the PR with DCO sign-off and the design rationale in the PR description.
 
