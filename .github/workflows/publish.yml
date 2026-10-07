@@ -1,6 +1,6 @@
 # Publish the constitution bundle from this repository (ADR-0058 Phase 2).
 #
-#   ghcr.io/trustacks/policy/constitution:<version>   (+ :latest for stable)
+#   ghcr.io/trustacks/policy/constitution:<version>   (+ :<major> and :latest for stable)
 #
 # Signed with Sigstore keyless OIDC, so the signature identity is THIS workflow:
 #
@@ -125,7 +125,10 @@ jobs:
           [[ -n "${DIGEST}" ]] || { echo "oras push returned no digest" >&2; exit 1; }
           echo "digest=${DIGEST}" >> "${GITHUB_OUTPUT}"
           if [[ "${PRE}" == "false" ]]; then
-            oras tag "${IMAGE}:${VERSION}" latest
+            # `:<major>` is what runners follow (e.g. `:1`): fixes in the 1.x
+            # line reach them without a runner release, and a 2.0 that needs a
+            # newer runner never arrives on a tag they track.
+            oras tag "${IMAGE}:${VERSION}" latest "${VERSION%%.*}"
           fi
 
       - name: Sign (keyless)
