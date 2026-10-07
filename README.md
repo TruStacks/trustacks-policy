@@ -59,6 +59,7 @@ trustacks-policy/
 │   ├── proposal.rego            # 16 rule_ids: proposal.*, argocd.*, practice.*, posture.*
 │   ├── proposal_test.rego
 │   ├── overlay_naming.rego      # the naming gate for customer overlay rules
+│   ├── data.naming.json         # the naming grammar the gate reads
 │   └── overlay_naming_test.rego
 ├── standards/                   # meta-rules: how customer rules are shaped
 │   ├── README.md
@@ -73,6 +74,7 @@ trustacks-policy/
 ├── renderers/                   # deploy-artifact layout per renderer
 │   ├── README.md
 │   └── {helm,kustomize}.yaml
+├── scripts/                     # build_inventory.py — the rule inventory publish.yml ships
 ├── tests/                       # the packs <-> constitution lockstep suite
 ├── ci-runtimes/                 # CI runtime packs
 │   └── README.md
@@ -92,7 +94,16 @@ Each subdirectory's README explains what that layer is, what shape contributions
 
 Still stubs, with their READMEs explaining the shape a contribution takes: `ci-runtimes/`, `industry-overlays/`. `compliance-overlays/` is empty **by design** — regulatory packs (SOC2, HIPAA, PCI, FedRAMP, ITIL) are TruStacks-curated paid content, and CI fails if a rule lands there.
 
-**What has not moved yet:** the product still builds and signs the published policy bundle from its own copy of these files, so for now the product repo remains the build source and this repo is the place the content is authored and reviewed. Re-pointing the build here — and rotating the signing identity that customers verify against — is the next phase, tracked in the product repo. Until it lands, a change made here needs the matching change there.
+**This repository builds and signs the published bundle.** A `v*` tag runs `.github/workflows/publish.yml`: the rego tests, then `ghcr.io/trustacks/policy/constitution:<version>`, signed with Sigstore keyless OIDC under this workflow's identity. Verify it with:
+
+```
+cosign verify \
+  --certificate-identity-regexp '^https://github\.com/TruStacks/trustacks-policy/\.github/workflows/publish\.yml@refs/tags/v.*$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/trustacks/policy/constitution:<version>
+```
+
+Bundles before 1.0.0 were signed by the product repository's pipeline; the TruStacks runner accepts both identities for one release cycle. The packs still ship inside the runner image for now, so a pack change here also needs the matching change in the product until packs move to the same pipeline.
 
 ---
 

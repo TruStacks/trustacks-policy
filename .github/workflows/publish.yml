@@ -1,0 +1,146 @@
+# Publish the constitution bundle from this repository (ADR-0058 Phase 2).
+#
+#   ghcr.io/trustacks/policy/constitution:<version>   (+ :latest for stable)
+#
+# Signed with Sigstore keyless OIDC, so the signature identity is THIS workflow:
+#
+#   https://github.com/TruStacks/trustacks-policy/.github/workflows/publish.yml@refs/tags/v<version>
+#
+# That identity is what customers and the TruStacks runner verify against. The
+# product repo's publish-policy.yml signed the same package under its own
+# identity until this one took over; the runner accepts both for one release
+# cycle, then the old one is retired. Renaming or moving this file changes the
+# identity — treat that as a trust-root rotation, not a refactor.
+#
+# Runs on GitHub-hosted runners only. This repository is public: a self-hosted
+# runner here would execute code from forks on our infrastructure.
+
+name: Publish constitution bundle
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver (e.g. 1.0.0). Must match the tag the run is dispatched from."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write # Sigstore keyless OIDC
+
+jobs:
+  publish:
+    name: Test, build, push, sign — constitution bundle
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/trustacks/policy/constitution
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Guard ref + resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            VERSION="${INPUT_VERSION}"
+            if [[ "${GITHUB_REF_TYPE}" != "tag" || "${GITHUB_REF_NAME}" != "v${VERSION}" ]]; then
+              echo "Refusing to publish: dispatch from the tag v${VERSION} (got ${GITHUB_REF})." >&2
+              exit 1
+            fi
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Refusing to publish: '${VERSION}' is not semver." >&2
+            exit 1
+          fi
+          [[ "${VERSION}" == *-* ]] && PRE=true || PRE=false
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "is_prerelease=${PRE}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install OPA
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/opa" \
+            https://openpolicyagent.org/downloads/v0.69.0/opa_linux_amd64_static
+          chmod +x "$RUNNER_TEMP/opa"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      # Publishing never skips the tests a PR would have run.
+      - name: Constitution tests
+        run: opa test constitution
+
+      - name: Build bundle + splice rule_inventory.json
+        run: |
+          python3 scripts/build_inventory.py --source constitution \
+            --out .build/rule_inventory.json --label constitution
+          opa build -b constitution -o bundle.tar.gz
+          gunzip bundle.tar.gz
+          tar --append --file=bundle.tar -C .build rule_inventory.json
+          gzip bundle.tar
+          echo "Bundle built ($(du -h bundle.tar.gz | cut -f1))."
+
+      - name: Install oras
+        uses: oras-project/setup-oras@38de303aac69abb66f3e6255b7198bff35f323e3 # v2.0.0
+
+      - name: Install cosign (pinned + checksum-verified)
+        env:
+          COSIGN_VERSION: v2.4.1
+          COSIGN_SHA256: 8b24b946dd5809c6bd93de08033bcf6bc0ed7d336b7785787c080f574b89249b
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/cosign" \
+            "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "${COSIGN_SHA256}  $RUNNER_TEMP/cosign" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/cosign"
+
+      - name: Log in to GHCR
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "${TOKEN}" | oras login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Push
+        id: push
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PRE: ${{ steps.version.outputs.is_prerelease }}
+        run: |
+          DIGEST=$(oras push "${IMAGE}:${VERSION}" \
+            --artifact-type application/vnd.trustacks.policy-bundle.v1+gzip \
+            --annotation org.opencontainers.image.source=https://github.com/TruStacks/trustacks-policy \
+            --annotation org.opencontainers.image.version="${VERSION}" \
+            --annotation org.opencontainers.image.revision="${GITHUB_SHA}" \
+            --annotation org.opencontainers.image.licenses=Apache-2.0 \
+            --annotation org.opencontainers.image.description="TruStacks constitution Rego bundle (OPA-compiled policy + rule inventory)." \
+            bundle.tar.gz:application/vnd.oci.image.layer.v1.tar+gzip \
+            | awk '/^Digest:/ {print $2}')
+          [[ -n "${DIGEST}" ]] || { echo "oras push returned no digest" >&2; exit 1; }
+          echo "digest=${DIGEST}" >> "${GITHUB_OUTPUT}"
+          if [[ "${PRE}" == "false" ]]; then
+            oras tag "${IMAGE}:${VERSION}" latest
+          fi
+
+      - name: Sign (keyless)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: "$RUNNER_TEMP/cosign" sign --yes "${IMAGE}@${DIGEST}"
+
+      # Verify exactly as a customer would, so a signature that cannot be
+      # verified fails the release instead of a customer's runner.
+      - name: Verify as a customer would
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          "$RUNNER_TEMP/cosign" verify \
+            --certificate-identity-regexp '^https://github\.com/TruStacks/trustacks-policy/\.github/workflows/publish\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${IMAGE}:${VERSION}" > /dev/null
+          echo "Verified ${IMAGE}:${VERSION}"
