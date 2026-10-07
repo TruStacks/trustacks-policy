@@ -4,9 +4,12 @@
     "reserved_namespaces": [
       "argocd",
       "constitution",
+      "posture",
+      "practice",
       "proposal",
       "trustacks"
     ],
-    "rule_id_pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+    "rule_id_pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
+    "version": 2
   }
 }

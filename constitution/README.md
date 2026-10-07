@@ -12,13 +12,47 @@ is weaker, not stronger, if the deciding half is a black box.
 
 ## What is here
 
-| File | What it holds |
+One file per rule, in the directory named for the rule's namespace
+(`../standards/rule-naming.md`, version 2):
+
+| Directory | What it holds |
 |---|---|
-| `proposal.rego` | the rules — path safety, required artifacts, and the five practice rules |
-| `proposal_test.rego` | their tests |
-| `overlay_naming.rego` | the rule-naming gate for customer-authored overlay rules (see `../standards/rule-naming.md`) |
-| `overlay_naming_test.rego` | its tests |
+| `proposal/` | `proposal.*` rules, plus `lib.rego` — what every rule shares: the rule index, gap analysis, the renderer, and the customer-overlay aggregator |
+| `argocd/` | `argocd.*` rules |
+| `practice/` | `practice.*` rules, plus `lib.rego` — the workflow and Dockerfile matchers they share |
+| `posture/` | `posture.*` rules — metadata only, no deny block |
+| `constitution/` | `overlay_naming.rego`, the rule-naming gate for customer-authored overlay rules (it emits `constitution.*` ids) |
 | `data.naming.json` | the rule-naming grammar the naming gate reads (`data.naming.*`) |
+
+Tests sit beside the rules as `*_test.rego`. They share one package
+(`proposal_test`) and the fixtures in `proposal/fixtures_test.rego`, so run the
+whole tree rather than one directory.
+
+**The directory names the namespace; it does not name the package or build the
+id.** `proposal/`, `argocd/`, `practice/` and `posture/` all declare
+`package proposal`, and OPA merges a package's files, so the runner's queries —
+`data.proposal.deny`, `data.proposal.gap`, `data.proposal.rule_metadata`,
+`data.proposal.rule_index` — are what they were when this was one file. Each
+rule file adds its own `rule_metadata["<namespace>.<name>"] := {...}` entry, with
+the id written out in full. Ids are never derived from the path: they are
+persisted in customer history (denial counts, scores, evidence), and a file
+move must not silently re-ID a rule. `../tests/test_namespace_equals_directory.py`
+checks instead that each id's namespace equals its directory, so a move without
+a rename fails CI.
+
+### Adding a rule
+
+1. Create `<namespace>/<name>.rego` — `package proposal`, the
+   `rule_metadata["<namespace>.<name>"]` entry, and the deny block (none for a
+   posture rule). Helpers more than one rule uses go in the directory's
+   `lib.rego`.
+2. Add tests in a `*_test.rego` beside it.
+3. A new directory is a new **reserved namespace**: every directory here is one,
+   so `data.naming.json` must list it. That file is generated in the TruStacks
+   product repo from its canonical rule-naming module — regenerate it there and
+   copy it here; `test_namespace_equals_directory.py` fails until you do.
+4. Never rename an existing `rule_id` to tidy it up. `argocd.repoURL_is_canonical`
+   predates the lowercase grammar and keeps its spelling for that reason.
 
 Sixteen `rule_id`s ship today, in four families:
 
@@ -39,6 +73,7 @@ Sixteen `rule_id`s ship today, in four families:
 
 ```sh
 opa test constitution
+uv run --with pytest --with pyyaml pytest tests -q   # layout, naming and pack lockstep
 ```
 
 Pin OPA to the version CI uses (`v0.69.0`). Testing the constitution on a

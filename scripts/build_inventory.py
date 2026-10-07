@@ -15,6 +15,13 @@ output shape is a contract with the runner's reader — keep it identical:
                              required_tooling_categories, practice_dimensions,
                              tier_scope, kind, rego_body, source}, ... ]}
 
+Each rule is attributed to the file that declares it, and its ``rego_body``
+is that file's source. A file that does not compile alone — a rule calling a
+helper from a sibling ``lib.rego``, as every ``constitution/practice/`` rule
+does — is evaluated with the whole tree loaded, keeping only the rule ids the
+file itself declares (read from ``opa parse``). Same behaviour as the product's
+builder; keep the two in step.
+
 Standard library only; needs ``opa`` on PATH.
 
 Usage::
@@ -49,19 +56,28 @@ def _strings(raw: Any) -> list[str]:
     return [str(x) for x in raw] if isinstance(raw, list) else []
 
 
-def rule_metadata(opa: str, rego_path: Path, package: str) -> dict[str, Any]:
-    """Evaluate ``data.<package>.rule_metadata`` against one file.
+class OpaError(RuntimeError):
+    """``opa`` exited non-zero."""
+
+
+def rule_metadata(opa: str, data_paths: list[Path], package: str) -> dict[str, Any]:
+    """Evaluate ``data.<package>.rule_metadata`` with ``data_paths`` loaded.
 
     Evaluated by OPA rather than parsed, so every rego syntax the metadata block
     may use is handled by the engine that will enforce it.
     """
+    args = [opa, "eval"]
+    for path in data_paths:
+        args += ["--data", str(path)]
     proc = subprocess.run(
-        [opa, "eval", "--data", str(rego_path), "--format", "json",
-         f"data.{package}.rule_metadata"],
+        [*args, "--format", "json", f"data.{package}.rule_metadata"],
         capture_output=True, text=True, timeout=30, check=False,
     )
     if proc.returncode != 0:
-        raise RuntimeError(f"opa eval failed on {rego_path}: {proc.stderr.strip()}")
+        # `--format json` reports compile errors on stdout, not stderr.
+        detail = (proc.stderr or proc.stdout).strip()
+        where = data_paths[0] if len(data_paths) == 1 else f"{len(data_paths)} files"
+        raise OpaError(f"opa eval failed on {where}: {detail}")
     try:
         value = json.loads(proc.stdout)["result"][0]["expressions"][0]["value"]
     except (KeyError, IndexError, json.JSONDecodeError):
@@ -69,14 +85,62 @@ def rule_metadata(opa: str, rego_path: Path, package: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def harvest(opa: str, rego_path: Path, label: str) -> list[dict[str, Any]]:
+def declared_rule_ids(opa: str, rego_path: Path) -> set[str]:
+    """The rule ids one file declares in ``rule_metadata``, read from its AST.
+
+    Handles the partial object ``rule_metadata["ns.name"] := {...}`` and the
+    literal ``rule_metadata := {"ns.name": {...}}``. Needs no other file, so it
+    works for a rule whose body calls helpers defined elsewhere. A key that is
+    not a string literal cannot be attributed and is refused, not guessed.
+    """
+    proc = subprocess.run(
+        [opa, "parse", "--format", "json", str(rego_path)],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    if proc.returncode != 0:
+        raise OpaError(f"opa parse failed on {rego_path}: {(proc.stderr or proc.stdout).strip()}")
+    declared: set[str] = set()
+    for rule in json.loads(proc.stdout).get("rules") or []:
+        head = rule.get("head") or {}
+        ref = head.get("ref") or []
+        name = ref[0].get("value") if ref else head.get("name")
+        if name != "rule_metadata":
+            continue
+        if len(ref) == 2 and ref[1].get("type") == "string":  # rule_metadata[<key>]
+            declared.add(str(ref[1]["value"]))
+            continue
+        value = head.get("value") or {}
+        if len(ref) <= 1 and value.get("type") == "object":
+            for key_term, _ in value.get("value") or []:
+                if key_term.get("type") != "string":
+                    raise OpaError(f"{rego_path}: rule_metadata key is not a string literal")
+                declared.add(str(key_term["value"]))
+            continue
+        raise OpaError(f"{rego_path}: rule_metadata is not statically attributable")
+    return declared
+
+
+def harvest(
+    opa: str, rego_path: Path, label: str, tree: list[Path], cache: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
     body = rego_path.read_text(encoding="utf-8")
     match = PACKAGE_RE.search(body)
     if match is None:
         return []
     package = match.group(1)
+    try:
+        metadata = rule_metadata(opa, [rego_path], package)
+    except OpaError:
+        # Does not compile alone: it calls a sibling's helper. Evaluate the
+        # whole tree once per package, keep only what this file declares.
+        declared = declared_rule_ids(opa, rego_path)
+        if not declared:
+            return []  # a helper file (e.g. lib.rego) — no rules to list
+        if package not in cache:
+            cache[package] = rule_metadata(opa, tree, package)
+        metadata = {k: v for k, v in cache[package].items() if k in declared}
     entries = []
-    for rule_id, meta in rule_metadata(opa, rego_path, package).items():
+    for rule_id, meta in metadata.items():
         if not isinstance(meta, dict):
             continue
         description = meta.get("description")
@@ -118,9 +182,10 @@ def main() -> int:
         return 1
 
     entries: list[dict[str, Any]] = []
-    for rego_path in sorted(args.source.rglob("*.rego")):
-        if not rego_path.name.endswith("_test.rego"):
-            entries.extend(harvest(opa, rego_path, args.label))
+    tree = [p for p in sorted(args.source.rglob("*.rego")) if not p.name.endswith("_test.rego")]
+    cache: dict[str, dict[str, Any]] = {}
+    for rego_path in tree:
+        entries.extend(harvest(opa, rego_path, args.label, tree, cache))
     if not entries:
         # A bundle that lists no rules is the failure #600 shipped to
         # production silently. Refuse rather than publish one.

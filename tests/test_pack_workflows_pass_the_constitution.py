@@ -30,7 +30,7 @@ import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CONSTITUTION = REPO_ROOT / "constitution" / "proposal.rego"
+CONSTITUTION = REPO_ROOT / "constitution"  # the whole tree: rules call lib helpers
 FRAMEWORK_PACKS = sorted((REPO_ROOT / "frameworks").glob("*.yaml"))
 
 # The practice rules that read a workflow's `run:` commands. Path-shape rules
