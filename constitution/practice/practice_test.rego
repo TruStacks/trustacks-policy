@@ -164,6 +164,102 @@ test_practice_argocd_prod_only_fires_on_prod_path if {
 	not "practice.argocd_prod_requires_manual_sync" in rule_ids
 }
 
+# ---- Prod is a tier, not a name ------------------------------------------
+#
+# The rule keys on `input.context.target_tier` for the cluster named in
+# `input.context.target_cluster`. Each fixture below swaps the third file for
+# an Application under one cluster's directory and sets (or omits) context.
+
+_automated_app_content := concat("\n", [
+	"apiVersion: argoproj.io/v1alpha1",
+	"kind: Application",
+	"spec:",
+	"  syncPolicy:",
+	"    automated:",
+	"      prune: true",
+	sprintf("  source:\n    repoURL: %v", [PLATFORM_URL]),
+	"",
+])
+
+_manual_app_content := sprintf(
+	"apiVersion: argoproj.io/v1alpha1\nkind: Application\nspec:\n  source:\n    repoURL: %v\n",
+	[PLATFORM_URL],
+)
+
+_app_input(cluster, content, context) := {
+	"proposal": object.union(good_input.proposal, {"files": [
+		good_input.proposal.files[0],
+		good_input.proposal.files[1],
+		{
+			"path": sprintf("argo-apps/argo-apps-%v/demo-application.yaml", [cluster]),
+			"content": content,
+		},
+	]}),
+	"context": context,
+}
+
+test_practice_argocd_prod_tier_with_non_prod_name_denies_automated_sync if {
+	candidate := _app_input("gke-us-east", _automated_app_content, {
+		"platform_repo_url": PLATFORM_URL,
+		"target_cluster": "gke-us-east",
+		"target_tier": "prod",
+	})
+	violations := proposal.deny with input as candidate
+	_has_rule(violations, "practice.argocd_prod_requires_manual_sync")
+}
+
+test_practice_argocd_dev_tier_allows_automated_sync_whatever_the_name if {
+	candidate := _app_input("gke-us-east", _automated_app_content, {
+		"platform_repo_url": PLATFORM_URL,
+		"target_cluster": "gke-us-east",
+		"target_tier": "dev",
+	})
+	violations := proposal.deny with input as candidate
+	not _has_rule(violations, "practice.argocd_prod_requires_manual_sync")
+}
+
+test_practice_argocd_prod_tier_only_guards_its_own_cluster_directory if {
+	# Tier context names gke-us-east; a file for some other cluster is not
+	# that cluster's Application and the tier says nothing about it.
+	candidate := _app_input("gke-eu-west", _automated_app_content, {
+		"platform_repo_url": PLATFORM_URL,
+		"target_cluster": "gke-us-east",
+		"target_tier": "prod",
+	})
+	violations := proposal.deny with input as candidate
+	not _has_rule(violations, "practice.argocd_prod_requires_manual_sync")
+}
+
+test_practice_argocd_prod_tier_does_not_match_a_cluster_name_prefix if {
+	# The trailing slash in the matched prefix keeps `argo-apps-gke-us-east-2/`
+	# from being read as the directory of cluster `gke-us-east`.
+	candidate := _app_input("gke-us-east-2", _automated_app_content, {
+		"platform_repo_url": PLATFORM_URL,
+		"target_cluster": "gke-us-east",
+		"target_tier": "prod",
+	})
+	violations := proposal.deny with input as candidate
+	not _has_rule(violations, "practice.argocd_prod_requires_manual_sync")
+}
+
+test_practice_argocd_no_tier_context_falls_back_to_prod_name if {
+	# Older Control Planes, the CLI and tests send no tier. The cluster
+	# literally named `prod` is still protected.
+	candidate := _app_input("prod", _automated_app_content, {"platform_repo_url": PLATFORM_URL})
+	violations := proposal.deny with input as candidate
+	_has_rule(violations, "practice.argocd_prod_requires_manual_sync")
+}
+
+test_practice_argocd_prod_tier_without_automated_sync_is_allowed if {
+	candidate := _app_input("gke-us-east", _manual_app_content, {
+		"platform_repo_url": PLATFORM_URL,
+		"target_cluster": "gke-us-east",
+		"target_tier": "prod",
+	})
+	violations := proposal.deny with input as candidate
+	not _has_rule(violations, "practice.argocd_prod_requires_manual_sync")
+}
+
 test_practice_dockerfile_runs_as_nonroot_denies_root_user if {
 	bad := object.union(good_input, {"proposal": object.union(good_input.proposal, {"files": [
 		good_input.proposal.files[0],
