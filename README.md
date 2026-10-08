@@ -27,13 +27,13 @@ TruStacks is an AI agent crew that proposes every software-delivery change as a 
          Each layer can only ratchet stricter than the one above.
 ```
 
-This repository hosts the **community layer**: framework knowledge packs, CI runtime packs, and industry-specific rule overlays. All content here is **Apache 2.0 licensed** and contributed under DCO sign-off.
+This repository hosts the **constitution** and the **community layer**: the universal rules, framework knowledge packs, tool-action packs, CI runtime packs, and industry-specific rule overlays. All content here is **Apache 2.0 licensed** and contributed under DCO sign-off.
 
 What lives where:
 
 | Layer | Where | License | Who maintains |
 |---|---|---|---|
-| Constitution (universal rules) | TruStacks (closed source today) | proprietary | TruStacks |
+| **Constitution** (universal rules) | **this repo** | **Apache 2.0** | **TruStacks** |
 | **Framework packs** (Python, Java, Go, .NET, …) | **this repo** | **Apache 2.0** | **community + TruStacks** |
 | **CI runtime packs** (GitHub Actions, GitLab CI, Azure DevOps, …) | **this repo** | **Apache 2.0** | **community + TruStacks** |
 | **Industry overlays** (banking, healthcare, …) | **this repo** | **Apache 2.0** | **community + TruStacks** |
@@ -54,11 +54,29 @@ trustacks-policy/
 ├── CODE_OF_CONDUCT.md           # Contributor Covenant 2.1
 ├── TRADEMARK.md                 # TruStacks trademark policy
 │
+├── constitution/                # the universal rules every proposal respects
+│   ├── README.md                #   one file per rule; the directory is the namespace
+│   ├── proposal/                # proposal.*  — shape + safety of the change (+ lib.rego)
+│   ├── argocd/                  # argocd.*    — repoURL_is_canonical
+│   ├── practice/                # practice.*  — delivery behaviours (+ lib.rego)
+│   ├── posture/                 # posture.*   — declared tooling, scored, never a deny
+│   ├── constitution/            # constitution.* — the naming gate for overlay rules
+│   └── data.naming.json         # the naming grammar the gate reads
 ├── standards/                   # meta-rules: how customer rules are shaped
 │   ├── README.md
 │   └── rule-naming.md           # rule_id grammar + reserved namespaces
 ├── frameworks/                  # framework knowledge packs
-│   └── README.md
+│   ├── README.md
+│   └── {python_fastapi,spring_boot,dotnet,go}.yaml
+├── tool-actions/                # tool -> canonical Action, pinned to a SHA
+│   ├── README.md
+│   ├── CURATION.md
+│   └── {trivy,semgrep,gitleaks,syft,cosign}.yaml
+├── renderers/                   # deploy-artifact layout per renderer
+│   ├── README.md
+│   └── {helm,kustomize}.yaml
+├── scripts/                     # build_inventory.py — the rule inventory publish.yml ships
+├── tests/                       # the packs <-> constitution lockstep suite
 ├── ci-runtimes/                 # CI runtime packs
 │   └── README.md
 ├── industry-overlays/           # industry-specific rule overlays
@@ -73,11 +91,20 @@ Each subdirectory's README explains what that layer is, what shape contributions
 
 ## Status
 
-This repository is in **bootstrap phase**. The directory structure and contribution shell are in place; **no content has been migrated yet**. The current TruStacks product (in [`trustacks-mvp`](https://github.com/TruStacks/trustacks-mvp)) ships framework packs baked into the runner image at `packs/frameworks/`. Those will migrate to this repo once the open-core distribution pipeline (Phase 5.2 of the product roadmap) lands.
+**Public, and holding real content as of 2026-09-23.** The constitution, the four framework packs, the five tool-action packs and the two renderer packs now live here, with CI that runs the rego tests and — the part that matters — evaluates **every framework pack's canonical CI workflow against the constitution on every PR**, so a rule and the pack that claims to satisfy it cannot drift apart in silence.
 
-If you want to see what a framework pack looks like today, the canonical reference is `packs/frameworks/python_fastapi.yaml` in the product repo.
+Still stubs, with their READMEs explaining the shape a contribution takes: `ci-runtimes/`, `industry-overlays/`. `compliance-overlays/` is empty **by design** — regulatory packs (SOC2, HIPAA, PCI, FedRAMP, ITIL) are TruStacks-curated paid content, and CI fails if a rule lands there.
 
-The repository is private during the TruStacks Beta program. It will become public when the open-core distribution pipeline is ready, projected at Beta launch in 2026.
+**This repository builds and signs the published bundle.** A `v*` tag runs `.github/workflows/publish.yml`: the rego tests, then `ghcr.io/trustacks/policy/constitution:<version>`, signed with Sigstore keyless OIDC under this workflow's identity. Verify it with:
+
+```
+cosign verify \
+  --certificate-identity-regexp '^https://github\.com/TruStacks/trustacks-policy/\.github/workflows/publish\.yml@refs/tags/v.*$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/trustacks/policy/constitution:<version>
+```
+
+Bundles before 1.0.0 were signed by the product repository's pipeline; the TruStacks runner accepts both identities for one release cycle. The packs still ship inside the runner image for now, so a pack change here also needs the matching change in the product until packs move to the same pipeline.
 
 ---
 

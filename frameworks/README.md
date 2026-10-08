@@ -6,15 +6,11 @@ This directory is the open-source home for community-contributed framework packs
 
 ---
 
-## Status — bootstrap
+## Status
 
-This directory is **empty by design** as of repository bootstrap. Framework packs currently ship inside the TruStacks runner image (see `packs/frameworks/` in the [trustacks-mvp](https://github.com/TruStacks/trustacks-mvp) repo). The four packs that ship today — `python_fastapi`, `spring_boot`, `dotnet`, `go` — will migrate here at the start of the open-core distribution arc (Phase 5.2 of the TruStacks roadmap).
+The four packs the product ships — `python_fastapi`, `spring_boot`, `dotnet`, `go` — live here, and CI evaluates each pack's canonical workflow against the constitution on every PR (`tests/`). Until the policy build moves to this repo, the product still ships its own copy inside the runner image, so a change here needs the matching change there.
 
-The reference shape of a pack lives at:
-
-> https://github.com/TruStacks/trustacks-mvp/blob/main/packs/frameworks/python_fastapi.yaml
-
-Read that file before designing a new pack. The YAML schema is also documented in the runner-side loader at `runner/src/trustacks_runner/frameworks/models.py` in the same product repo.
+Read an existing pack, e.g. [`python_fastapi.yaml`](python_fastapi.yaml), before designing a new one.
 
 ---
 
@@ -94,6 +90,37 @@ Reviews focus on *durability* (will this pack still be correct after the next ma
 - [ ] Every `uses:` pins a 40-character commit SHA — **resolved from the registry, not recalled from memory.** A remembered SHA can name a real commit that the action has since removed; GitHub then hard-fails the run before any step executes. `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` gives you the real one.
 - [ ] The test job still contains the invocation the paired `practice.*` rule looks for.
 - [ ] No `uses:` inside a YAML comment. The provenance allowlist is built by scanning the template's raw text, so a commented-out example silently widens what emitted workflows are permitted to reference.
+
+---
+
+## Design principle — packs and behavior rules cooperate
+
+Framework packs and the constitution's baseline behavior rules are **two halves of the same expectation**, not parallel surfaces. See **[ADR-0013 § Cooperating-layers principle](https://github.com/TruStacks/trustacks-mvp/blob/main/docs/decisions/0013-open-core-boundary.md#cooperating-layers-principle)** for the full architectural framing.
+
+The summary, in one line: **the framework pack is the recipe; the constitution's behavior rule is the required outcome.** Each pack's CI workflow template includes the steps (`mvn test`, `dotnet test`, …) that the constitution's `practice.workflow_has_test_step` rule then validates; each Dockerfile template ends with a non-root `USER` so the `practice.dockerfile_runs_as_nonroot` rule passes; every `uses:` line is pinned to a SHA so `practice.workflow_pins_action_versions` passes.
+
+**Practical contributor implication:** when you propose a new framework pack, the review will check it against the behavior rules it pairs with — not just *"does this Dockerfile build?"* but *"does emitting this pack's templates produce artifacts the constitution will accept?"* If a new framework introduces a delivery shape the existing rules don't cover (e.g., a language whose CI conventions don't fit `mvn test`/`pytest`/`npm test`-style invocations), propose the matching constitution rule update in the same design conversation — the pack alone is best-effort guidance; the pack + rule is enforcement with a recipe.
+
+The Rego namespace for behavior rules is internally `practice.*` (locked identifier; customer-facing label is **Behaviors**).
+
+---
+
+## Contributing a new pack
+
+Priority order driven by customer signal — at the time of writing the most-requested-but-not-yet-shipped frameworks are:
+
+1. **Rust** (axum / actix-web)
+2. **Node.js** (Express / NestJS / Fastify)
+3. **Ruby** (Rails / Sinatra)
+
+If you want to contribute one, read `CONTRIBUTING.md` at the repo root for the DCO + PR flow, then:
+
+1. Open a GitHub issue with the `discussion` label first. Tell us what framework you want to pack and what the canonical Dockerfile + CI workflow shape is. We'll respond with design feedback before you sink time into the YAML.
+2. Once design is aligned, draft `frameworks/<framework-id>.yaml`. Use [`python_fastapi.yaml`](python_fastapi.yaml) in this directory as the structural template.
+3. If the pack benefits from a worked example, add a minimal sample app under `frameworks/<framework-id>/sample/`. Sample apps must be small (single file is ideal); they exist to anchor the pack, not demonstrate the framework.
+4. Submit the PR with DCO sign-off and the design rationale in the PR description.
+
+Reviews focus on *durability* (will this pack still be correct after the next major framework version?) and *safety* (does the reference Dockerfile actually build? does the CI workflow run?).
 
 ---
 

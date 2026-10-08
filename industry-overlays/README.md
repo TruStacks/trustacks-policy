@@ -29,6 +29,16 @@ The contribution surface opens once the open-core distribution pipeline lands (P
 
 ---
 
+## Layout and naming
+
+An industry overlay lives in the directory named for its namespace —
+`industry-overlays/<namespace>/<name>.rego` holds `<namespace>.<name>` — the
+same rule the constitution follows (`../standards/rule-naming.md`, version 2).
+The namespace names the industry (`banking_baseline`, `healthcare_hipaa_adjacent`),
+never a customer, and never a reserved namespace. CI checks both.
+
+---
+
 ## The ratchet rule
 
 Every overlay layer (industry, customer, or otherwise) can only **ratchet stricter** than the constitution + framework packs above it. The TruStacks policy linter enforces this at compile time — an overlay cannot waive a constitutional rule, only add additional constraints.

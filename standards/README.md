@@ -14,11 +14,12 @@ shaped.
 
 ## What's here today
 
-- [**`rule-naming.md`**](./rule-naming.md) — the grammar + reserved
-  namespaces + length cap that govern every `rule_id` in a customer
-  overlay. Enforced by the TruStacks Constitution at bundle-sign
-  time, and validated at every authoring surface (CLI, UI, Control
-  Plane API).
+- [**`rule-naming.md`**](./rule-naming.md) (version 2) — the grammar +
+  reserved namespaces + length cap that govern every `rule_id` in a
+  customer overlay, and the *namespace = directory* rule for the rules
+  this repository ships. Enforced by the TruStacks Constitution at
+  bundle-sign time, validated at every authoring surface (CLI, UI,
+  Control Plane API), and checked against this repository's layout in CI.
 
 ## Contributing a new standard
 
