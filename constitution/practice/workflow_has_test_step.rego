@@ -16,6 +16,9 @@ deny contains msg if {
 	some f in input.proposal.files
 	_is_workflow(f.path)
 	wf := yaml.unmarshal(f.content)
+	# A deploy workflow (ADR-0062) applies an artifact; it has no suite to
+	# run. The CI workflow beside it is still judged.
+	not _is_deploy_workflow(wf)
 	not _workflow_has_step_matching(wf, _test_runner_substrings)
 	not _workflow_has_step_matching_re(wf, _jvm_test_pattern)
 	msg := {

@@ -31,6 +31,7 @@ rule_metadata["practice.argocd_prod_requires_manual_sync"] := {
 	"required_tooling_categories": [],
 	"practice_dimensions": ["manual_promotion_to_prod"],
 	"tier_scope": ["prod"],
+	"target_kinds": ["kubernetes"],
 }
 
 deny contains msg if {
@@ -49,10 +50,13 @@ deny contains msg if {
 }
 
 # Tier-keyed: the file sits under the directory of the cluster this proposal
-# targets, and that cluster's tier is prod.
+# targets, and that cluster's tier is prod. Read through the `target_*` helpers
+# (proposal/lib.rego), which prefer `input.context.target` and fall back to the
+# flat keys a runner before ADR-0060 sends.
 _targets_prod_cluster(path) if {
-	input.context.target_tier == "prod"
-	cluster := input.context.target_cluster
+	target_kind == "kubernetes"
+	target_tier == "prod"
+	cluster := target_name
 	is_string(cluster)
 	cluster != ""
 	startswith(path, sprintf("argo-apps/argo-apps-%v/", [cluster]))

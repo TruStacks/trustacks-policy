@@ -12,9 +12,12 @@ rule_metadata["proposal.has_argocd_application"] := {
 	"required_tooling_categories": ["gitops_controller"],
 	"practice_dimensions": [],
 	"tier_scope": ["any"],
+	"target_kinds": ["kubernetes"],
 }
 
+# Kubernetes only (ADR-0062): an ECS Fargate target has no ArgoCD.
 deny contains msg if {
+	target_kind == "kubernetes"
 	count([
 	f |
 		some f in input.proposal.files
