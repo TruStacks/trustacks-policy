@@ -72,6 +72,7 @@ trustacks-policy/
 │   ├── README.md
 │   ├── CURATION.md
 │   └── {trivy,semgrep,gitleaks,syft,cosign}.yaml
+├── target-kinds/                # deploy-artifact shape per non-Kubernetes target kind (ECS Fargate)
 ├── renderers/                   # deploy-artifact layout per renderer
 │   ├── README.md
 │   └── {helm,kustomize}.yaml
