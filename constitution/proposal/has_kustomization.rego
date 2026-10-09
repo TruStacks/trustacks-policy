@@ -12,9 +12,11 @@ rule_metadata["proposal.has_kustomization"] := {
 	"required_tooling_categories": [],
 	"practice_dimensions": [],
 	"tier_scope": ["any"],
+	"target_kinds": ["kubernetes"],
 }
 
 deny contains msg if {
+	target_kind == "kubernetes"
 	renderer == "kustomize"
 	count([
 	f |

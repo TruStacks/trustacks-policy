@@ -1,0 +1,225 @@
+# ECS Fargate target-kind pack (ADR-0062).
+#
+# The canonical deploy-artifact shape for a deployment target whose kind is
+# `ecs-fargate` (ADR-0060). Per service, per target, TruStacks emits:
+#
+#   <service_root>/task-definition.json   the workload: image, user, hardening
+#   <service_root>/deploy-target.json     which account/cluster/service it binds
+#                                         to — blank on first emit, filled by
+#                                         the customer in a reviewed PR
+#   .github/workflows/deploy-<service>-<target>.yaml
+#                                         applies the merged task definition
+#
+# plus the reusable CI workflow every kind already gets (build + push image).
+#
+# Not emitted, and never will be from this pack: the ECS cluster, the ECS
+# service, networking, load balancers, IAM roles, the OIDC provider, log groups.
+# Those are the customer's infrastructure; TruStacks authors the artifact and
+# the customer runs it. The PR body lists them as prerequisites.
+kind: ecs-fargate
+display_name: ECS Fargate
+
+# Under gitops/ like every other deploy artifact: Git is the source of truth
+# for what runs, and the deploy is triggered by the merge (ADR-0062 decision 3).
+# {cluster} is the target name. Required: the task definition is per target.
+default_root_template: gitops/{application}/{cluster}/{service}
+
+# The action whose presence makes a workflow a "deploy workflow" to the
+# constitution (`proposal.has_ecs_deploy_workflow`,
+# `practice.workflow_prod_deploy_requires_environment`).
+deploy_action: aws-actions/amazon-ecs-deploy-task-definition
+
+task_definition:
+  path: task-definition.json
+  # Used when the image's runtime user cannot be read from the framework pack.
+  # 65532 is the distroless `nonroot` user. Never 0.
+  default_user: "65532"
+  # The canonical skeleton. The agent adapts within it (port, cpu/memory,
+  # non-secret environment, architecture) and never removes the hardening:
+  # user, readonlyRootFilesystem, capabilities, the writable /tmp volume,
+  # logging. Region, role ARNs and registry credentials are not here — they
+  # are bound at deploy time from deploy-target.json.
+  template: |
+    {
+      "family": "@@family@@",
+      "requiresCompatibilities": ["FARGATE"],
+      "networkMode": "awsvpc",
+      "cpu": "256",
+      "memory": "512",
+      "runtimePlatform": {
+        "operatingSystemFamily": "LINUX",
+        "cpuArchitecture": "X86_64"
+      },
+      "containerDefinitions": [
+        {
+          "name": "@@container_name@@",
+          "image": "@@image@@",
+          "essential": true,
+          "user": "@@user@@",
+          "readonlyRootFilesystem": true,
+          "linuxParameters": {
+            "capabilities": { "drop": ["ALL"] },
+            "initProcessEnabled": true
+          },
+          "portMappings": [
+            { "name": "http", "containerPort": 8080, "protocol": "tcp" }
+          ],
+          "environment": [],
+          "secrets": [],
+          "mountPoints": [
+            { "sourceVolume": "tmp", "containerPath": "/tmp", "readOnly": false }
+          ],
+          "stopTimeout": 30,
+          "logConfiguration": {
+            "logDriver": "awslogs",
+            "options": {
+              "awslogs-group": "@@log_group@@",
+              "awslogs-stream-prefix": "@@container_name@@",
+              "mode": "non-blocking",
+              "max-buffer-size": "25m"
+            }
+          }
+        }
+      ],
+      "volumes": [{ "name": "tmp" }]
+    }
+
+# The customer-owned binding. Committed, so retargeting a deploy is a reviewed
+# PR rather than an edit in GitHub settings. Every value is emitted blank.
+binding:
+  path: deploy-target.json
+  fields:
+    - name: aws_account_id
+      purpose: the 12-digit AWS account the target lives in; the deploy refuses any other
+      pattern: "^[0-9]{12}$"
+    - name: aws_region
+      purpose: the region of the ECS cluster (also the awslogs region)
+      pattern: "^[a-z]{2}(-gov|-iso[a-z]*)?-[a-z]+-[0-9]$"
+    - name: deploy_role_arn
+      purpose: the IAM role GitHub Actions assumes via OIDC to deploy this target
+      pattern: "^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$"
+    - name: ecs_cluster
+      purpose: the ECS cluster name or ARN
+      pattern: "^(arn:aws[a-z-]*:ecs:[a-z0-9-]+:[0-9]{12}:cluster/)?[A-Za-z0-9_-]{1,255}$"
+    - name: ecs_service
+      purpose: the existing ECS service this task definition updates
+      pattern: "^[A-Za-z0-9_-]{1,255}$"
+    - name: execution_role_arn
+      purpose: the task execution role (image pull, logs, secrets retrieval)
+      pattern: "^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$"
+    - name: task_role_arn
+      purpose: optional — the role the application itself runs as
+      pattern: "^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$"
+      required: false
+
+deploy_workflow:
+  path_template: .github/workflows/deploy-{service}-{cluster}.yaml
+  # SHAs are curated here, the same way framework packs carry `checkout`:
+  # these actions are mandated by the target kind, not chosen by the customer,
+  # so they are not Profile-keyed tool-actions packs. Refresh per
+  # packs/tool_actions/CURATION.md. last_verified: 2026-10-09.
+  #   actions/checkout                          v6.1.0  (node24)
+  #   aws-actions/configure-aws-credentials     v6.3.0  (2026-09-15)
+  #   aws-actions/amazon-ecs-deploy-task-definition
+  #                                             v2.6.3  (2026-07-01; v2.6.4 was
+  #                                             released 2026-10-09 and skipped
+  #                                             as a cooldown)
+  template: |
+    # Deploys @@service@@ to the ECS Fargate target @@cluster@@ (tier: @@tier@@).
+    #
+    # Emitted by TruStacks. It runs when a merged change touches this target's
+    # task definition or binding, so the reviewed commit on main is what
+    # deploys. Roll back by reverting in Git; re-running an old run is refused.
+    name: @@workflow_name@@
+    on:
+      push:
+        branches: [main]
+        paths:
+          - "@@service_root@@/task-definition.json"
+          - "@@service_root@@/deploy-target.json"
+      workflow_dispatch: {}
+    permissions: {}
+    concurrency:
+      group: @@workflow_name@@
+      cancel-in-progress: false
+    jobs:
+      deploy:
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        # The OIDC token's environment claim is what the deploy role's trust
+        # policy pins to. On a prod-tier target, required reviewers on this
+        # environment (where the GitHub plan offers them) are a second human
+        # approval after the PR.
+        environment: @@cluster@@
+        permissions:
+          contents: read
+          id-token: write
+        env:
+          SERVICE_ROOT: "@@service_root@@"
+        steps:
+          - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+            with:
+              persist-credentials: false
+          - name: Refuse to deploy anything but the head of main
+            env:
+              GH_TOKEN: ${{ github.token }}
+            run: |
+              head="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+              if [ "$head" != "$GITHUB_SHA" ]; then
+                echo "::error::${GITHUB_SHA} is not the head of main (${head}). Roll back by reverting in Git, not by re-running an old deploy."
+                exit 1
+              fi
+          - name: Read this target's binding
+            id: target
+            run: |
+              f="${SERVICE_ROOT}/deploy-target.json"
+              for key in aws_account_id aws_region deploy_role_arn ecs_cluster ecs_service execution_role_arn task_role_arn; do
+                value="$(jq -r --arg k "$key" '.[$k] // ""' "$f")"
+                if [ -z "$value" ] && [ "$key" != "task_role_arn" ]; then
+                  echo "::error file=${f}::${key} is not set. Fill it in for this target and merge the change."
+                  exit 1
+                fi
+                if ! [[ "$value" =~ ^[A-Za-z0-9:/_.@+=,-]*$ ]]; then
+                  echo "::error file=${f}::${key} contains characters it cannot."
+                  exit 1
+                fi
+                echo "${key}=${value}" >> "$GITHUB_OUTPUT"
+              done
+          - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+            with:
+              role-to-assume: ${{ steps.target.outputs.deploy_role_arn }}
+              aws-region: ${{ steps.target.outputs.aws_region }}
+              allowed-account-ids: ${{ steps.target.outputs.aws_account_id }}
+              role-session-name: trustacks-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+          - name: Bind the task definition to this target
+            env:
+              EXECUTION_ROLE_ARN: ${{ steps.target.outputs.execution_role_arn }}
+              TASK_ROLE_ARN: ${{ steps.target.outputs.task_role_arn }}
+              BOUND_REGION: ${{ steps.target.outputs.aws_region }}
+            run: |
+              jq --arg exec "$EXECUTION_ROLE_ARN" --arg task "$TASK_ROLE_ARN" --arg region "$BOUND_REGION" '
+                .executionRoleArn = $exec
+                | (if $task != "" then .taskRoleArn = $task else . end)
+                | .containerDefinitions |= map(
+                    if .logConfiguration.logDriver == "awslogs"
+                    then .logConfiguration.options["awslogs-region"] = $region
+                    else . end)
+              ' "${SERVICE_ROOT}/task-definition.json" > "${RUNNER_TEMP}/task-definition.json"
+              echo "Bound task definition sha256: $(sha256sum "${RUNNER_TEMP}/task-definition.json" | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
+          - name: Check the service's own rollback setting
+            env:
+              CLUSTER: ${{ steps.target.outputs.ecs_cluster }}
+              SERVICE: ${{ steps.target.outputs.ecs_service }}
+            run: |
+              rollback="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+                --query 'services[0].deploymentConfiguration.deploymentCircuitBreaker.rollback' --output text)"
+              if [ "$rollback" != "True" ]; then
+                echo "::warning::ECS service ${SERVICE} has no deployment circuit breaker with rollback, so a failed deploy will not roll itself back. Enable it on the service."
+              fi
+          - uses: aws-actions/amazon-ecs-deploy-task-definition@c465972ecbd160473f22e683363b422a5412a3de # v2.6.3
+            with:
+              task-definition: ${{ runner.temp }}/task-definition.json
+              cluster: ${{ steps.target.outputs.ecs_cluster }}
+              service: ${{ steps.target.outputs.ecs_service }}
+              wait-for-service-stability: true
+              wait-for-minutes: 20
