@@ -16,7 +16,7 @@ package proposal
 import rego.v1
 
 rule_metadata["practice.ecs_task_image_is_pinned"] := {
-	"description": "Every ECS container image is pinned by digest or by a tag that is not latest or another floating name.",
+	"description": "Every ECS container image names a digest or a non-floating tag (not latest, not untagged). A tag is not immutable: only a digest guarantees the reviewed image.",
 	"required_tooling_categories": [],
 	"practice_dimensions": [],
 	"tier_scope": ["any"],
