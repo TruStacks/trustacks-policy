@@ -18,9 +18,13 @@ rule_metadata["proposal.has_helm_chart"] := {
 	"required_tooling_categories": [],
 	"practice_dimensions": [],
 	"tier_scope": ["any"],
+	"target_kinds": ["kubernetes"],
 }
 
+# Kubernetes only (ADR-0062): a non-Kubernetes target has no renderer, whatever
+# the Application's stored `renderer` field says.
 deny contains msg if {
+	target_kind == "kubernetes"
 	renderer == "helm"
 	count([
 	f |

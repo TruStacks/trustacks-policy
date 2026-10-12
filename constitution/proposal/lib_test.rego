@@ -36,6 +36,15 @@ test_rule_index_lists_all_constitution_rules if {
 		"posture.sast_sca_declared",
 		"posture.secret_scanning_declared",
 		"posture.sbom_signing_declared",
+		# ADR-0062 — ECS Fargate, the second target kind.
+		"proposal.has_ecs_task_definition",
+		"proposal.has_ecs_deploy_workflow",
+		"practice.ecs_task_runs_as_nonroot",
+		"practice.ecs_task_readonly_root_filesystem",
+		"practice.ecs_task_secrets_not_in_environment",
+		"practice.ecs_task_image_is_pinned",
+		"practice.ecs_task_configures_logging",
+		"practice.workflow_prod_deploy_requires_environment",
 	}
 	{rid | some rid, _ in idx} == expected
 }

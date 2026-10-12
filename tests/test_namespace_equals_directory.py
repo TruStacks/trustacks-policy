@@ -132,8 +132,12 @@ def test_grandfathered_ids_still_exist_and_still_need_it() -> None:
     assert not any(pattern.fullmatch(rule_id) for rule_id in GRANDFATHERED_IDS)
 
 
-def test_the_constitution_ships_the_sixteen_ids_it_always_has() -> None:
-    """The directory split moved files, not ids. A changed set is customer history."""
+def test_the_constitution_ships_the_ids_it_always_has_plus_the_ecs_rules() -> None:
+    """The directory split moved files, not ids. A changed set is customer history.
+
+    ADR-0062 (product repo) ADDED eight ids for ECS Fargate; none of the
+    original sixteen changed. Adding is fine; renaming or dropping one is not.
+    """
     ids = {rule_id for path in _rule_files(CONSTITUTION) for rule_id in _declared(path)}
     assert ids == {
         "proposal.allowed_paths",
@@ -152,6 +156,15 @@ def test_the_constitution_ships_the_sixteen_ids_it_always_has() -> None:
         "posture.sast_sca_declared",
         "posture.secret_scanning_declared",
         "posture.sbom_signing_declared",
+        # ADR-0062 — ECS Fargate (added, not renamed).
+        "proposal.has_ecs_task_definition",
+        "proposal.has_ecs_deploy_workflow",
+        "practice.ecs_task_runs_as_nonroot",
+        "practice.ecs_task_readonly_root_filesystem",
+        "practice.ecs_task_secrets_not_in_environment",
+        "practice.ecs_task_image_is_pinned",
+        "practice.ecs_task_configures_logging",
+        "practice.workflow_prod_deploy_requires_environment",
     }
 
 

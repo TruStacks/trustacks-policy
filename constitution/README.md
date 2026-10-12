@@ -54,17 +54,26 @@ a rename fails CI.
 4. Never rename an existing `rule_id` to tidy it up. `argocd.repoURL_is_canonical`
    predates the lowercase grammar and keeps its spelling for that reason.
 
-Sixteen `rule_id`s ship today, in four families:
+Twenty-four `rule_id`s ship today, in four families. Rules that apply to
+only one deployment-target kind say so in `rule_metadata.target_kinds`
+(`kubernetes` or `ecs-fargate`); a target with no kind is Kubernetes.
 
 - **`proposal.*`** — shape and safety of the change itself: `allowed_paths`,
   `no_path_traversal`, `has_workflow`, `has_helm_chart`, `has_kustomization`,
-  `has_argocd_application`.
+  `has_argocd_application`, and for ECS Fargate targets
+  `has_ecs_task_definition`, `has_ecs_deploy_workflow`.
 - **`argocd.*`** — `repoURL_is_canonical`: an emitted ArgoCD Application points
   at the platform repo it was written to.
 - **`practice.*`** — the delivery behaviours a proposal must demonstrate:
   `workflow_has_test_step`, `workflow_has_lint_step`,
   `workflow_pins_action_versions`, `dockerfile_runs_as_nonroot`,
-  `argocd_prod_requires_manual_sync`.
+  `argocd_prod_requires_manual_sync`, and for ECS Fargate targets
+  `ecs_task_runs_as_nonroot`, `ecs_task_readonly_root_filesystem`,
+  `ecs_task_secrets_not_in_environment`, `ecs_task_image_is_pinned`,
+  `ecs_task_configures_logging`, `workflow_prod_deploy_requires_environment`.
+  The last one checks that a prod deploy job *names* a GitHub environment. It
+  cannot see whether that environment requires reviewers, so it declares no
+  practice dimension and never counts as verified.
 - **`posture.*`** — declared tooling, scored but never a deny:
   `image_scanning_declared`, `sast_sca_declared`, `secret_scanning_declared`,
   `sbom_signing_declared`.

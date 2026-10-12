@@ -103,6 +103,77 @@ renderer := r if {
 	is_string(r)
 }
 
+# ---- Deployment target (ADR-0060 decision 3, ADR-0062) ---------------------
+#
+# The target this proposal deploys to arrives as `input.context.target =
+# {name, tier, kind}`, with the deprecated flat `target_cluster` / `target_tier`
+# beside it for Kubernetes targets. Rules read the target ONLY through these
+# helpers — never the raw keys — so the compatibility window lives in one place
+# (a runner test fails if a rule bypasses them).
+#
+# Absent stays absent: with no target context `target_tier` / `target_name` are
+# undefined, which is what puts a rule on its name-keyed fallback. `target_kind`
+# defaults to kubernetes, because every target that existed before the field is
+# one, and an older runner must be judged exactly as it was.
+
+default target_kind := "kubernetes"
+
+target_kind := k if {
+	k := input.context.target.kind
+	is_string(k)
+	k != ""
+}
+
+target_tier := t if {
+	t := input.context.target.tier
+	is_string(t)
+} else := t if {
+	t := input.context.target_tier
+	is_string(t)
+}
+
+target_name := n if {
+	n := input.context.target.name
+	is_string(n)
+} else := n if {
+	n := input.context.target_cluster
+	is_string(n)
+}
+
+# ---- ECS Fargate artifacts (ADR-0062) ----------------------------------------
+
+# The action whose presence makes a workflow a deploy workflow. Kept in step
+# with `deploy_action` in packs/target_kinds/ecs-fargate.yaml.
+_ecs_deploy_action := "aws-actions/amazon-ecs-deploy-task-definition"
+
+_is_ecs_task_definition(path) if {
+	startswith(path, "gitops/")
+	endswith(path, "/task-definition.json")
+}
+
+# A job deploys to ECS when one of its steps uses the deploy action, pinned to
+# anything.
+_job_deploys_to_ecs(job) if {
+	some step in job.steps
+	is_string(step.uses)
+	startswith(step.uses, concat("", [_ecs_deploy_action, "@"]))
+}
+
+_is_deploy_workflow(wf) if {
+	some _, job in wf.jobs
+	_job_deploys_to_ecs(job)
+}
+
+# Container definitions of a parsed task definition. Malformed input yields
+# none rather than an error: pre-emit validation owns structure, and a rule
+# that errors takes the whole evaluation down with it.
+_ecs_containers(content) := cs if {
+	json.is_valid(content)
+	td := json.unmarshal(content)
+	is_array(td.containerDefinitions)
+	cs := [c | some c in td.containerDefinitions; is_object(c)]
+} else := []
+
 # ---- Customer overlay aggregator ------------------------------------------
 # Phase 4 slice 9a — the runner loads the customer's overlay bundle
 # alongside the constitution. Each overlay rule lives under
