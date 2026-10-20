@@ -500,3 +500,18 @@ test_dockerfile_lowercase_directives_and_tabs_are_understood if {
 	not _nonroot_denied("from alpine:3\nuser\tapp\n")
 	_nonroot_denied("from alpine:3\nuser\troot\n")
 }
+
+# Review on #698: a USER inside a here-document is file content, not an instruction.
+test_dockerfile_user_inside_a_heredoc_is_not_an_instruction if {
+	_nonroot_denied("FROM alpine:3\nCOPY <<EOF /tmp/config\nUSER 1001\nEOF\n")
+}
+
+test_dockerfile_heredoc_then_a_real_nonroot_user_passes if {
+	not _nonroot_denied("FROM alpine:3\nCOPY <<EOF /tmp/config\nUSER root\nEOF\nUSER 1001\n")
+}
+
+# Review on #698: a variable user can be overridden by a build argument, so it fails closed.
+test_dockerfile_variable_user_fails_closed if {
+	_nonroot_denied("FROM alpine:3\nARG APP_USER=root\nUSER ${APP_USER}\n")
+	_nonroot_denied("FROM alpine:3\nARG APP_USER=1001\nUSER $APP_USER\n")
+}

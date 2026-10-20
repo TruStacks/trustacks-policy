@@ -47,7 +47,7 @@ dockerfile_template: |
   FROM gcr.io/distroless/static:nonroot
   WORKDIR /app
   COPY --from=build /app/server /app/server
-  USER 65532:65532
+  USER 65532
 
   EXPOSE 8080
   ENTRYPOINT ["/app/server"]
