@@ -22,6 +22,7 @@ inputs:
   exit-code: "1"
   severity: HIGH,CRITICAL
   ignore-unfixed: "true"
+sarif_output: trivy-results.sarif
 notes: |
   Runs after the docker build step (the image must exist locally for
   scanning). `exit-code: 1` fails the workflow on any HIGH/CRITICAL
