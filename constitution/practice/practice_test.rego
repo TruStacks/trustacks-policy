@@ -534,3 +534,29 @@ test_dockerfile_continued_run_then_a_real_nonroot_user_passes if {
 	not _nonroot_denied("FROM alpine:3\nRUN apk add curl \\\n    jq\nUSER 1001\n")
 	not _nonroot_denied("# escape=`\nFROM alpine:3\nRUN echo hi `\n    there\nUSER 1001\n")
 }
+
+# Second review on trustacks-policy#11, each checked with `docker build`.
+test_dockerfile_escaped_escape_does_not_continue if {
+	_nonroot_denied("FROM alpine:3\nUSER 1001\nRUN echo hi \\\\\nUSER root\n")
+}
+
+test_dockerfile_three_escapes_do_not_continue if {
+	not _nonroot_denied("FROM alpine:3\nRUN echo hi \\\\\\\nUSER 1001\n")
+	_nonroot_denied("FROM alpine:3\nUSER 1001\nRUN echo hi \\\\\\\nUSER root\n")
+}
+
+test_dockerfile_a_line_of_only_the_escape_continues if {
+	_nonroot_denied("FROM alpine:3\nRUN echo hi\\\n\\\nUSER 1001\n")
+}
+
+test_dockerfile_comment_ending_in_escape_does_not_continue if {
+	_nonroot_denied("FROM alpine:3\nUSER 1001\n# note \\\nUSER root\n")
+}
+
+test_dockerfile_unknown_directive_keeps_the_backslash_escape if {
+	_nonroot_denied("# unknown=1\n# escape=`\nFROM alpine:3\nUSER root\nRUN echo hi \\\nUSER 1001\n")
+}
+
+test_dockerfile_syntax_directive_before_escape_is_honoured if {
+	_nonroot_denied("# syntax=docker/dockerfile:1\n# escape=`\nFROM alpine:3\nUSER root\nRUN echo hi `\nUSER 1001\n")
+}

@@ -50,19 +50,34 @@ _dockerfile_runs_as_nonroot(content) if {
 	not contains(user, "$")
 }
 
-# Logical instruction lines. A line ending in the escape character continues
-# onto the next, and comment or blank lines inside a continuation are dropped,
-# as Docker's parser does. Without this, `RUN echo hi \` then `USER 1001`
-# reads as a USER instruction although Docker parses it as part of the RUN
-# (review on trustacks-policy#11).
+# Logical instruction lines, joined the way Docker's parser joins them (review
+# on trustacks-policy#11). Each case below was checked with a real
+# `docker build`:
+# - An instruction line ending in the escape character continues onto the
+#   next, so `RUN echo hi \` then `USER 1001` is one RUN, not a USER.
+# - Comment and blank lines inside a continuation are dropped.
+# - A comment line never continues: `# note \` then `USER root` is a USER.
+# - An escape that follows another escape does not continue: `RUN echo hi \\`
+#   then `USER root` is a USER, and so is three of them. This mirrors
+#   buildkit's own test, `([^E])E[ \t]*$|^E[ \t]*$` for escape E.
 _lines(content) := [trim_space(l) | some l in split(_joined(content), "\n")]
 
-_joined(content) := regex.replace(content, concat("", [_escape(content), `[ \t]*\r?\n(?:[ \t]*(?:#[^\n]*)?\r?\n)*`]), " ")
+_joined(content) := regex.replace(content, _continuation(_escape(content)), "${1} ")
+
+# Group 1 is the instruction line without its continuing escape: a line that
+# doesn't start with `#`, whose final escape follows a non-escape character,
+# or a line that is only the escape.
+_continuation(e) := concat("", [
+	`(?m)^([ \t]*(?:[^#\s\n][^\n]*[^`, e, `\n]|[^#\s`, e, `\n])?)`,
+	e, `[ \t]*\r?\n(?:[ \t]*(?:#[^\n]*)?\r?\n)*`,
+])
 
 # The escape character: backslash, or backtick when an `# escape=`` parser
-# directive at the top of the file says so.
+# directive says so. Directives must open the file, and only the ones Docker
+# knows (`syntax`, `check`) may come before `escape`: an unknown one is a
+# comment, and after a comment Docker stops reading directives.
 _escape(content) := "\u0060" if {
-	regex.match(`(?i)\A(?:[ \t]*#[ \t]*[a-z]+[ \t]*=[^\n]*\n)*[ \t]*#[ \t]*escape[ \t]*=[ \t]*\x60`, content)
+	regex.match(`(?i)\A(?:[ \t]*#[ \t]*(?:syntax|check)[ \t]*=[^\n]*\n)*[ \t]*#[ \t]*escape[ \t]*=[ \t]*\x60`, content)
 } else := `\\`
 
 # Indices of lines that are here-document bodies (and their terminators).
