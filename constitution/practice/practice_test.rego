@@ -158,6 +158,7 @@ test_practice_argocd_prod_only_fires_on_prod_path if {
 		},
 	]})})
 	violations := proposal.deny with input as dev_input
+
 	# practice.argocd_prod_requires_manual_sync should NOT appear among
 	# the rule_ids — automated sync is fine on non-prod clusters.
 	rule_ids := {v.rule_id | some v in violations}
@@ -311,6 +312,7 @@ test_practice_workflow_pins_action_versions_denies_unpinned_third_party if {
 	violations := proposal.deny with input as bad
 	some v in violations
 	v.rule_id == "practice.workflow_pins_action_versions"
+
 	# Tag-shaped ref (`v5`) gets the original "should pin to a SHA, not a tag" message.
 	contains(v.message, "should pin to a SHA, not a tag")
 }
@@ -340,6 +342,7 @@ test_practice_workflow_pins_action_versions_diagnoses_near_sha if {
 	violations := proposal.deny with input as bad
 	some v in violations
 	v.rule_id == "practice.workflow_pins_action_versions"
+
 	# Diagnostic message names the length defect.
 	contains(v.message, "not exactly 40 characters")
 	contains(v.message, "got 39")
@@ -422,6 +425,7 @@ test_practice_workflow_pins_action_versions_real_tag_gets_tag_message if {
 	some v in violations
 	v.rule_id == "practice.workflow_pins_action_versions"
 	contains(v.message, "should pin to a SHA, not a tag")
+
 	# AND the diagnostic-message branch should NOT also fire for the same ref.
 	count([violation |
 		some violation in violations
@@ -452,4 +456,107 @@ test_practice_workflow_pins_action_versions_branch_name_gets_tag_message if {
 	some v in violations
 	v.rule_id == "practice.workflow_pins_action_versions"
 	contains(v.message, "should pin to a SHA, not a tag")
+}
+
+# #696: the final stage's last USER decides, and `:group` is not part of the user.
+_with_dockerfile(content) := object.union(good_input, {"proposal": object.union(good_input.proposal, {"files": [
+	good_input.proposal.files[0],
+	good_input.proposal.files[1],
+	good_input.proposal.files[2],
+	{"path": "gitops/checkout/local-k3d/demo/Dockerfile", "content": content},
+]})})
+
+_nonroot_denied(content) if {
+	some v in proposal.deny with input as _with_dockerfile(content)
+	v.rule_id == "practice.dockerfile_runs_as_nonroot"
+}
+
+test_dockerfile_a_later_user_root_overrides_an_earlier_nonroot_user if {
+	_nonroot_denied("FROM alpine:3\nUSER 1001\nRUN true\nUSER root\n")
+}
+
+test_dockerfile_user_0_with_a_group_is_root if {
+	_nonroot_denied("FROM alpine:3\nUSER 0:0\n")
+}
+
+test_dockerfile_user_root_with_a_group_is_root if {
+	_nonroot_denied("FROM alpine:3\nUSER root:root\n")
+}
+
+test_dockerfile_nonroot_user_with_a_group_passes if {
+	not _nonroot_denied("FROM alpine:3\nUSER 1001:1001\n")
+}
+
+test_dockerfile_builder_stage_root_then_final_stage_nonroot_passes if {
+	not _nonroot_denied("FROM golang:1.23 AS build\nUSER root\nRUN go build\nFROM gcr.io/distroless/static\nUSER 65532\n")
+}
+
+test_dockerfile_nonroot_only_in_the_builder_stage_fails if {
+	# The final image runs as the base image's default user, usually root.
+	_nonroot_denied("FROM golang:1.23 AS build\nUSER 1001\nRUN go build\nFROM alpine:3\nCOPY --from=build /app /app\n")
+}
+
+test_dockerfile_lowercase_directives_and_tabs_are_understood if {
+	not _nonroot_denied("from alpine:3\nuser\tapp\n")
+	_nonroot_denied("from alpine:3\nuser\troot\n")
+}
+
+# Review on #698: a USER inside a here-document is file content, not an instruction.
+test_dockerfile_user_inside_a_heredoc_is_not_an_instruction if {
+	_nonroot_denied("FROM alpine:3\nCOPY <<EOF /tmp/config\nUSER 1001\nEOF\n")
+}
+
+test_dockerfile_heredoc_then_a_real_nonroot_user_passes if {
+	not _nonroot_denied("FROM alpine:3\nCOPY <<EOF /tmp/config\nUSER root\nEOF\nUSER 1001\n")
+}
+
+# Review on #698: a variable user can be overridden by a build argument, so it fails closed.
+test_dockerfile_variable_user_fails_closed if {
+	_nonroot_denied("FROM alpine:3\nARG APP_USER=root\nUSER ${APP_USER}\n")
+	_nonroot_denied("FROM alpine:3\nARG APP_USER=1001\nUSER $APP_USER\n")
+}
+
+# Review on trustacks-policy#11: a line continued with the escape character is
+# one instruction, so a USER on the continuation is part of the RUN, not a USER.
+test_dockerfile_user_on_a_continued_line_is_not_an_instruction if {
+	_nonroot_denied("FROM alpine:3\nRUN echo hi \\\nUSER 1001\n")
+}
+
+test_dockerfile_continuation_skips_comment_and_blank_lines if {
+	_nonroot_denied("FROM alpine:3\nRUN echo hi \\\n# note\n\nUSER 1001\n")
+}
+
+test_dockerfile_backtick_escape_continuation_is_one_instruction if {
+	_nonroot_denied("# escape=`\nFROM alpine:3\nRUN echo hi `\nUSER 1001\n")
+}
+
+test_dockerfile_continued_run_then_a_real_nonroot_user_passes if {
+	not _nonroot_denied("FROM alpine:3\nRUN apk add curl \\\n    jq\nUSER 1001\n")
+	not _nonroot_denied("# escape=`\nFROM alpine:3\nRUN echo hi `\n    there\nUSER 1001\n")
+}
+
+# Second review on trustacks-policy#11, each checked with `docker build`.
+test_dockerfile_escaped_escape_does_not_continue if {
+	_nonroot_denied("FROM alpine:3\nUSER 1001\nRUN echo hi \\\\\nUSER root\n")
+}
+
+test_dockerfile_three_escapes_do_not_continue if {
+	not _nonroot_denied("FROM alpine:3\nRUN echo hi \\\\\\\nUSER 1001\n")
+	_nonroot_denied("FROM alpine:3\nUSER 1001\nRUN echo hi \\\\\\\nUSER root\n")
+}
+
+test_dockerfile_a_line_of_only_the_escape_continues if {
+	_nonroot_denied("FROM alpine:3\nRUN echo hi\\\n\\\nUSER 1001\n")
+}
+
+test_dockerfile_comment_ending_in_escape_does_not_continue if {
+	_nonroot_denied("FROM alpine:3\nUSER 1001\n# note \\\nUSER root\n")
+}
+
+test_dockerfile_unknown_directive_keeps_the_backslash_escape if {
+	_nonroot_denied("# unknown=1\n# escape=`\nFROM alpine:3\nUSER root\nRUN echo hi \\\nUSER 1001\n")
+}
+
+test_dockerfile_syntax_directive_before_escape_is_honoured if {
+	_nonroot_denied("# syntax=docker/dockerfile:1\n# escape=`\nFROM alpine:3\nUSER root\nRUN echo hi `\nUSER 1001\n")
 }

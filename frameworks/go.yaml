@@ -40,11 +40,14 @@ dockerfile_template: |
   ENV CGO_ENABLED=0 GOOS=linux
   RUN go build -trimpath -ldflags="-s -w" -o /app/server .
 
-  # Runtime stage — distroless static, ~2 MB, runs as uid 65532
-  # (`nonroot`) by default. No need for an explicit USER directive.
+  # Runtime stage — distroless static, ~2 MB. The `:nonroot` image already
+  # defaults to uid 65532, but we say so explicitly: a reviewer, a scanner
+  # (hadolint DL3002) and the constitution's practice.dockerfile_runs_as_nonroot
+  # all read the Dockerfile, not the base image's default user (#696).
   FROM gcr.io/distroless/static:nonroot
   WORKDIR /app
   COPY --from=build /app/server /app/server
+  USER 65532
 
   EXPOSE 8080
   ENTRYPOINT ["/app/server"]
