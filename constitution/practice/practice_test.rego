@@ -515,3 +515,22 @@ test_dockerfile_variable_user_fails_closed if {
 	_nonroot_denied("FROM alpine:3\nARG APP_USER=root\nUSER ${APP_USER}\n")
 	_nonroot_denied("FROM alpine:3\nARG APP_USER=1001\nUSER $APP_USER\n")
 }
+
+# Review on trustacks-policy#11: a line continued with the escape character is
+# one instruction, so a USER on the continuation is part of the RUN, not a USER.
+test_dockerfile_user_on_a_continued_line_is_not_an_instruction if {
+	_nonroot_denied("FROM alpine:3\nRUN echo hi \\\nUSER 1001\n")
+}
+
+test_dockerfile_continuation_skips_comment_and_blank_lines if {
+	_nonroot_denied("FROM alpine:3\nRUN echo hi \\\n# note\n\nUSER 1001\n")
+}
+
+test_dockerfile_backtick_escape_continuation_is_one_instruction if {
+	_nonroot_denied("# escape=`\nFROM alpine:3\nRUN echo hi `\nUSER 1001\n")
+}
+
+test_dockerfile_continued_run_then_a_real_nonroot_user_passes if {
+	not _nonroot_denied("FROM alpine:3\nRUN apk add curl \\\n    jq\nUSER 1001\n")
+	not _nonroot_denied("# escape=`\nFROM alpine:3\nRUN echo hi `\n    there\nUSER 1001\n")
+}

@@ -50,7 +50,20 @@ _dockerfile_runs_as_nonroot(content) if {
 	not contains(user, "$")
 }
 
-_lines(content) := [trim_space(l) | some l in split(content, "\n")]
+# Logical instruction lines. A line ending in the escape character continues
+# onto the next, and comment or blank lines inside a continuation are dropped,
+# as Docker's parser does. Without this, `RUN echo hi \` then `USER 1001`
+# reads as a USER instruction although Docker parses it as part of the RUN
+# (review on trustacks-policy#11).
+_lines(content) := [trim_space(l) | some l in split(_joined(content), "\n")]
+
+_joined(content) := regex.replace(content, concat("", [_escape(content), `[ \t]*\r?\n(?:[ \t]*(?:#[^\n]*)?\r?\n)*`]), " ")
+
+# The escape character: backslash, or backtick when an `# escape=`` parser
+# directive at the top of the file says so.
+_escape(content) := "\u0060" if {
+	regex.match(`(?i)\A(?:[ \t]*#[ \t]*[a-z]+[ \t]*=[^\n]*\n)*[ \t]*#[ \t]*escape[ \t]*=[ \t]*\x60`, content)
+} else := `\\`
 
 # Indices of lines that are here-document bodies (and their terminators).
 _heredoc_lines(lines) := {k |
