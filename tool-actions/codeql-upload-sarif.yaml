@@ -1,0 +1,27 @@
+# GitHub code scanning — SARIF upload
+#
+# Not a Profile tool. It rides along with any scanner pack that sets
+# `sarif_output` (trivy, semgrep): the DevOps Engineer emits this step right
+# after the scan so the results land in GitHub code scanning, where the
+# customer's read-only GitHub Signals source reads them (ADR-0066 decision 9).
+# Without it a scanner writes SARIF that nothing ever reads.
+#
+# Marketplace: https://github.com/github/codeql-action (upload-sarif/)
+# Verified 2026-10-20: tag v4.39.0 -> commit 6f2ac81f… (annotated tag
+# dereferenced), and upload-sarif/action.yml exists at that commit.
+
+tool_name: codeql-upload-sarif
+display_name: GitHub code scanning SARIF upload (github/codeql-action/upload-sarif)
+profile_categories: []
+action: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee
+action_version_label: v4.39.0
+inputs: {}
+notes: |
+  Emit immediately after the scan step, with `if: always()` so a scan that
+  fails the job on findings still uploads them, and
+  `with: { sarif_file: <the scanner's sarif_output>, category: <tool_name> }`.
+  The job needs `permissions: { contents: read, security-events: write }`.
+  Code scanning must be available on the repo (public repos, or GitHub
+  Advanced Security on private ones); otherwise the upload step fails with a
+  clear error and nothing else changes.
+last_verified: "2026-10-20"

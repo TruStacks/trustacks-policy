@@ -17,6 +17,7 @@ inputs:
   config: auto
   output_format: sarif
   output_destination: semgrep.sarif
+sarif_output: semgrep.sarif
 notes: |
   `config: auto` selects Semgrep's curated registry rules matching the
   detected languages. Customers who need org-specific rule packs
