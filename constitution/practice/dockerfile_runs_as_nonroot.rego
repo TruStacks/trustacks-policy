@@ -10,6 +10,8 @@ rule_metadata["practice.dockerfile_runs_as_nonroot"] := {
 	"required_tooling_categories": [],
 	"practice_dimensions": ["non_root_containers"],
 	"tier_scope": ["any"],
+	# ADR-0067: a repository's own file is enough to judge this rule.
+	"subjects": ["proposal", "repo"],
 }
 
 deny contains msg if {

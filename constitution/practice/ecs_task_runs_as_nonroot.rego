@@ -20,6 +20,8 @@ rule_metadata["practice.ecs_task_runs_as_nonroot"] := {
 	"practice_dimensions": ["non_root_containers"],
 	"tier_scope": ["any"],
 	"target_kinds": ["ecs-fargate"],
+	# ADR-0067: a repository's own file is enough to judge this rule.
+	"subjects": ["proposal", "repo"],
 }
 
 deny contains msg if {
