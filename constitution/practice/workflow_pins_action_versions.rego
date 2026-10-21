@@ -18,6 +18,8 @@ rule_metadata["practice.workflow_pins_action_versions"] := {
 	"required_tooling_categories": [],
 	"practice_dimensions": ["supply_chain_pinning"],
 	"tier_scope": ["any"],
+	# ADR-0067: a repository's own file is enough to judge this rule.
+	"subjects": ["proposal", "repo"],
 }
 
 deny contains msg if {

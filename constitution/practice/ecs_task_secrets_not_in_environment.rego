@@ -20,6 +20,8 @@ rule_metadata["practice.ecs_task_secrets_not_in_environment"] := {
 	"practice_dimensions": [],
 	"tier_scope": ["any"],
 	"target_kinds": ["ecs-fargate"],
+	# ADR-0067: a repository's own file is enough to judge this rule.
+	"subjects": ["proposal", "repo"],
 }
 
 _secret_name_pattern := `(?i)(^|_)(PASSWORD|PASSWD|SECRET|SECRET_KEY|TOKEN|API_?KEY|PRIVATE_KEY|ACCESS_KEY(_ID)?|SECRET_ACCESS_KEY|CREDENTIALS?|AUTH_DATA)$`
