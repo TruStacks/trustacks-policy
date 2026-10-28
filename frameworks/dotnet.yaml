@@ -56,8 +56,13 @@ dockerfile_template: |
   COPY --from=build /app/publish .
 
   # Non-root identity required by practice.dockerfile_runs_as_nonroot.
-  RUN useradd --uid 1001 --create-home app
-  USER 1001
+  # The aspnet image already ships a non-root `app` user (UID 1654, also
+  # $APP_UID); creating another `app` fails the build. Name it by number:
+  # the gate can't resolve a variable. Group 0 gets the owner's permissions
+  # on /app so the image also runs on OpenShift, which starts the container
+  # as an arbitrary UID in group 0.
+  RUN chgrp -R 0 /app && chmod -R g=u /app
+  USER 1654:0
 
   ENV ASPNETCORE_URLS=http://+:8080
   EXPOSE 8080

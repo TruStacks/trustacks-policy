@@ -64,8 +64,11 @@ dockerfile_template: |
   COPY --from=build /workspace/target/*.jar /app/app.jar
 
   # Non-root identity required by practice.dockerfile_runs_as_nonroot.
-  RUN useradd --uid 1001 --create-home app
-  USER 1001
+  # Group 0 gets the owner's permissions on /app so the image also runs on
+  # OpenShift, which starts the container as an arbitrary UID in group 0.
+  RUN useradd --uid 1001 --gid 0 --create-home app \
+      && chgrp -R 0 /app && chmod -R g=u /app
+  USER 1001:0
 
   EXPOSE 8080
   ENTRYPOINT ["java", "-jar", "/app/app.jar"]
