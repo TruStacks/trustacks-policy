@@ -16,7 +16,7 @@ prompt_addendum: |
     - uses an official `python:<runtime_version>-slim` base image,
     - installs runtime deps from pyproject.toml (uv) or requirements.txt
       (pip), pinning `--no-cache-dir` for pip,
-    - declares a non-root USER (1001 or app),
+    - declares a numeric non-root USER in group 0 (`USER 1001:0`),
     - ENTRYPOINT runs `uvicorn <app_module>:app --host 0.0.0.0`.
   The CI workflow must run `pytest` (and `ruff check` if the project
   uses ruff). The customer's Helm chart should use the existing

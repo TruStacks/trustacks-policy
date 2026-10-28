@@ -34,7 +34,8 @@ prompt_addendum: |
         / `JavaLanguageVersion.of(...)` in Gradle).
     Stage 2 (runtime): `eclipse-temurin:<jdk>-jre` (smaller image),
       copies `target/*.jar` from the build stage to /app.jar.
-    The runtime stage MUST declare a non-root USER (typically 1001).
+    The runtime stage MUST declare a numeric non-root USER in group 0
+    (`USER 1001:0`).
     ENTRYPOINT is `java -jar /app.jar`.
   The CI workflow must run `mvn -B test` (Maven) or `./gradlew test`
   (Gradle). Cache the local Maven repo or Gradle dependencies between

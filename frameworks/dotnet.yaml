@@ -26,7 +26,9 @@ prompt_addendum: |
     Stage 2 (runtime): `mcr.microsoft.com/dotnet/aspnet:<version>`
       (smaller than the SDK image), copies `/app/publish` from the
       build stage. Set `ASPNETCORE_URLS=http://+:8080` so Kestrel
-      listens on a known port. Declare a non-root USER (1001).
+      listens on a known port. Declare `USER 1654:0`: the aspnet image
+      already ships that non-root user, and group 0 lets OpenShift's
+      arbitrary UID write.
       ENTRYPOINT is `["dotnet", "<AssemblyName>.dll"]` — the assembly
       name typically matches the .csproj filename minus the extension.
   CI workflow: `dotnet restore` + `dotnet build --no-restore` +
