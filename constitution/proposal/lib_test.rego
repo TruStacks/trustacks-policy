@@ -45,6 +45,8 @@ test_rule_index_lists_all_constitution_rules if {
 		"practice.ecs_task_image_is_pinned",
 		"practice.ecs_task_configures_logging",
 		"practice.workflow_prod_deploy_requires_environment",
+		# ADR-0070 — the Kubernetes workload baseline.
+		"practice.k8s_workload_restricted",
 	}
 	{rid | some rid, _ in idx} == expected
 }

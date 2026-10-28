@@ -165,6 +165,8 @@ def test_the_constitution_ships_the_ids_it_always_has_plus_the_ecs_rules() -> No
         "practice.ecs_task_image_is_pinned",
         "practice.ecs_task_configures_logging",
         "practice.workflow_prod_deploy_requires_environment",
+        # ADR-0070 — the Kubernetes workload baseline (added, not renamed).
+        "practice.k8s_workload_restricted",
     }
 
 
