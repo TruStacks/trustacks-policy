@@ -17,15 +17,43 @@ default_root_template: gitops/{application}/{cluster}/{service}
 # these — no `_helpers.tpl`, which is why the system prompt forbids `include`
 # of a named helper: `helm create` scaffolds helpers this chart does not carry,
 # and reaching for one from memory produces a chart that cannot render (#356).
+#
+# ADR-0070: one workload baseline for every Kubernetes distribution, written
+# literally in the Deployment so `practice.k8s_workload_restricted` can read it.
+# Exposure is an Ingress, never a native OpenShift Route (Gary, 2026-10-28):
+# OpenShift's router turns an Ingress into a managed Route.
 files:
   - path: Chart.yaml
     purpose: chart metadata — name, apiVersion v2, appVersion
   - path: values.yaml
-    purpose: image repository + tag, replica count, service port
+    purpose: >-
+      image repository + tag, replica count, service port, resources, and an
+      `ingress` block that is OFF by default — `enabled: false`, `host: ""`,
+      `className: ""`, `annotations: {}`. The hostname is the customer's to
+      set; never guess one. On an OpenShift target, default `annotations` to
+      `{route.openshift.io/termination: edge}` so the Route the router creates
+      terminates TLS.
   - path: templates/deployment.yaml
-    purpose: the Deployment, referencing .Values.image
+    purpose: >-
+      the Deployment, referencing .Values.image, with the restricted baseline
+      written literally (not via toYaml): pod `securityContext` with
+      `runAsNonRoot: true` and `seccompProfile: {type: RuntimeDefault}`; each
+      container `securityContext` with `allowPrivilegeEscalation: false` and
+      `capabilities: {drop: ["ALL"]}`; `resources.requests` and
+      `resources.limits` (cpu and memory) on every container; a containerPort
+      above 1024. Never `runAsUser`, `runAsGroup` or `fsGroup`.
   - path: templates/service.yaml
     purpose: the ClusterIP Service
+  - path: templates/ingress.yaml
+    purpose: >-
+      a networking.k8s.io/v1 Ingress wrapped in `{{- if .Values.ingress.enabled }}`,
+      host from `.Values.ingress.host`, `ingressClassName` only when
+      `.Values.ingress.className` is set, annotations from
+      `.Values.ingress.annotations`, path `/` (Prefix) to the Service. On
+      OpenShift: the router turns a TLS-enabled Ingress (the termination
+      annotation is enough) into a Route that redirects HTTP to HTTPS, an
+      unknown `route.openshift.io/termination` value is ignored and falls back
+      to edge, and `nginx.ingress.kubernetes.io/*` annotations do nothing.
 
 # What the ArgoCD Application points at, and what it must carry.
 argocd:

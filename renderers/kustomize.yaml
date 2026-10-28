@@ -24,7 +24,14 @@ files:
   - path: base/kustomization.yaml
     purpose: lists the base resources — no namespace, no image tag
   - path: base/deployment.yaml
-    purpose: the Deployment, with the image left for the overlay to set
+    purpose: >-
+      the Deployment, with the image left for the overlay to set, and the
+      restricted baseline (ADR-0070): pod `securityContext` with
+      `runAsNonRoot: true` and `seccompProfile: {type: RuntimeDefault}`; each
+      container `securityContext` with `allowPrivilegeEscalation: false` and
+      `capabilities: {drop: ["ALL"]}`; `resources.requests` and
+      `resources.limits` (cpu and memory) on every container; a containerPort
+      above 1024. Never `runAsUser`, `runAsGroup` or `fsGroup`.
   - path: base/service.yaml
     purpose: the ClusterIP Service
   - path: overlays/{cluster}/kustomization.yaml
