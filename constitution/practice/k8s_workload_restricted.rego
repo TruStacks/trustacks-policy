@@ -27,13 +27,21 @@
 # Shares the `non_root_containers` dimension with the Dockerfile rule: the
 # image declares a non-root user, the workload refuses to run as root. Either
 # one denying contradicts the claim.
+#
+# Gated on the runner capability `k8s_workload_baseline`. Runners follow the
+# published bundle but their agent's instructions ship in the image, so when
+# this rule publishes, every runner older than the release that taught the
+# agent the baseline would have every Kubernetes proposal denied for a practice
+# it was never told about. Those runners send no capability; the rule is silent
+# for them, exactly as before it existed, and the Control Plane does not count
+# that silence as evidence (proposal_evidence.py).
 
 package proposal
 
 import rego.v1
 
 rule_metadata["practice.k8s_workload_restricted"] := {
-	"description": "Every Kubernetes Deployment sets runAsNonRoot, RuntimeDefault seccomp, allowPrivilegeEscalation: false, drops ALL capabilities and declares requests and limits; every container drops ALL, disallows privilege escalation and declares cpu or memory requests and limits; no fixed runAsUser/runAsGroup/fsGroup, privileged, hostNetwork/hostPID/hostIPC, hostPath, added capabilities or ports <= 1024.",
+	"description": "Every Kubernetes Deployment sets runAsNonRoot, RuntimeDefault seccomp, allowPrivilegeEscalation: false, drops ALL capabilities and declares requests and limits; every container drops ALL, disallows privilege escalation and declares cpu or memory requests and limits; no fixed runAsUser/runAsGroup/fsGroup, privileged, hostNetwork/hostPID/hostIPC, hostPath, added capabilities or ports <= 1024. Applies only to proposals from a runner that declares the k8s_workload_baseline capability: older runners' agents were never taught it.",
 	"required_tooling_categories": [],
 	"practice_dimensions": ["non_root_containers"],
 	"tier_scope": ["any"],
@@ -72,6 +80,7 @@ _k8s_restricted_forbidden := {
 
 deny contains msg if {
 	target_kind == "kubernetes"
+	runner_capability("k8s_workload_baseline")
 	some f in input.proposal.files
 	_is_k8s_deployment(f.path)
 	text := _k8s_uncommented(f.content)
@@ -88,6 +97,7 @@ deny contains msg if {
 
 deny contains msg if {
 	target_kind == "kubernetes"
+	runner_capability("k8s_workload_baseline")
 	some f in input.proposal.files
 	_is_k8s_deployment(f.path)
 	text := _k8s_uncommented(f.content)
@@ -105,6 +115,7 @@ deny contains msg if {
 
 deny contains msg if {
 	target_kind == "kubernetes"
+	runner_capability("k8s_workload_baseline")
 	some f in input.proposal.files
 	_is_k8s_deployment(f.path)
 	text := _k8s_uncommented(f.content)
@@ -121,6 +132,7 @@ deny contains msg if {
 
 deny contains msg if {
 	target_kind == "kubernetes"
+	runner_capability("k8s_workload_baseline")
 	some f in input.proposal.files
 	_is_k8s_deployment(f.path)
 	text := _k8s_uncommented(f.content)

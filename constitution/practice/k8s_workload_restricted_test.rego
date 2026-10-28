@@ -39,7 +39,12 @@ spec:
               memory: 512Mi
 `
 
-k8s_restricted_input(content) := {"proposal": {"files": [{"path": k8s_restricted_path, "content": content}]}}
+k8s_restricted_runner := {"runner": {"capabilities": ["k8s_workload_baseline"]}}
+
+k8s_restricted_input(content) := {
+	"proposal": {"files": [{"path": k8s_restricted_path, "content": content}]},
+	"context": k8s_restricted_runner,
+}
 
 k8s_restricted_denials(content) := {m.message |
 	some m in proposal.deny with input as k8s_restricted_input(content)
@@ -116,15 +121,24 @@ test_k8s_restricted_ignores_comment_lines if {
 }
 
 test_k8s_restricted_applies_to_kustomize_base if {
-	inp := {"proposal": {"files": [{"path": "gitops/shop/api/base/deployment.yaml", "content": "kind: Deployment\n"}]}}
+	inp := {
+		"proposal": {"files": [{"path": "gitops/shop/api/base/deployment.yaml", "content": "kind: Deployment\n"}]},
+		"context": k8s_restricted_runner,
+	}
 	denied := {m | some m in proposal.deny with input as inp; m.rule_id == "practice.k8s_workload_restricted"}
 	count(denied) > 0
 }
 
 test_k8s_restricted_ignores_files_outside_gitops_and_other_kinds if {
-	outside := {"proposal": {"files": [{"path": "deploy/deployment.yaml", "content": "kind: Deployment\n"}]}}
+	outside := {
+		"proposal": {"files": [{"path": "deploy/deployment.yaml", "content": "kind: Deployment\n"}]},
+		"context": k8s_restricted_runner,
+	}
 	count({m | some m in proposal.deny with input as outside; m.rule_id == "practice.k8s_workload_restricted"}) == 0
-	ecs := object.union(k8s_restricted_input("kind: Deployment\n"), {"context": {"target": {"kind": "ecs-fargate"}}})
+	ecs := object.union(
+		k8s_restricted_input("kind: Deployment\n"),
+		{"context": {"target": {"kind": "ecs-fargate"}}},
+	)
 	count({m | some m in proposal.deny with input as ecs; m.rule_id == "practice.k8s_workload_restricted"}) == 0
 }
 
@@ -188,4 +202,48 @@ test_k8s_restricted_denies_a_low_port_with_an_inline_comment if {
 	content := replace(k8s_restricted_good, "containerPort: 8080", "containerPort: 80 # http")
 	some m in k8s_restricted_denials(content)
 	contains(m, "containerPort 80")
+}
+
+# ---- The runner-capability gate (ADR-0070) ----------------------------------
+#
+# Runners follow the published bundle; their agent's instructions ship in the
+# image. A runner older than the release that taught the agent the baseline
+# sends no capability, and must be judged exactly as before the rule existed.
+
+k8s_restricted_unhardened := "apiVersion: apps/v1\nkind: Deployment\nspec:\n  template:\n    spec:\n      securityContext:\n        runAsUser: 1001\n      containers:\n        - name: api\n          image: x\n"
+
+test_k8s_restricted_is_silent_for_an_older_runner if {
+	old := {"proposal": {"files": [{"path": k8s_restricted_path, "content": k8s_restricted_unhardened}]}}
+	count({m | some m in proposal.deny with input as old; m.rule_id == "practice.k8s_workload_restricted"}) == 0
+}
+
+test_the_published_bundle_allows_an_older_runners_kubernetes_proposal if {
+	# The whole gate, not just this rule: an old runner's ordinary Kubernetes
+	# proposal must not be denied by anything this rule adds.
+	old := {
+		"proposal": {"files": [{"path": k8s_restricted_path, "content": k8s_restricted_unhardened}]},
+		"context": {"target": {"name": "gke", "tier": "dev", "kind": "kubernetes"}},
+	}
+	denied := proposal.deny with input as old
+	every m in denied {
+		m.rule_id != "practice.k8s_workload_restricted"
+	}
+}
+
+test_k8s_restricted_is_silent_for_a_runner_with_other_capabilities if {
+	other := {
+		"proposal": {"files": [{"path": k8s_restricted_path, "content": k8s_restricted_unhardened}]},
+		"context": {"runner": {"capabilities": ["something_else"]}},
+	}
+	count({m | some m in proposal.deny with input as other; m.rule_id == "practice.k8s_workload_restricted"}) == 0
+}
+
+test_k8s_restricted_judges_a_runner_that_declares_the_capability if {
+	count(k8s_restricted_denials(k8s_restricted_unhardened)) > 0
+}
+
+test_runner_capability_reads_the_declared_list if {
+	proposal.runner_capability("k8s_workload_baseline") with input as {"context": k8s_restricted_runner}
+	not proposal.runner_capability("k8s_workload_baseline") with input as {"context": {}}
+	not proposal.runner_capability("k8s_workload_baseline") with input as {}
 }

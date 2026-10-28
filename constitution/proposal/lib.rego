@@ -150,6 +150,20 @@ target_name := n if {
 	is_string(n)
 }
 
+# ---- Runner capabilities (ADR-0070) -------------------------------------------
+#
+# What the agent that wrote this proposal was taught to write, declared by the
+# runner as `input.context.runner.capabilities`. Runners follow the published
+# bundle (`:1`) but carry their agent's instructions in the image, so a rule
+# that judges something only a newer agent writes must ask first — or it denies
+# every proposal an older runner's agent writes. Absent means none: an older
+# runner sends no `runner` key, and a capability-gated rule stays silent for it.
+
+runner_capability(name) if {
+	some c in input.context.runner.capabilities
+	c == name
+}
+
 # ---- ECS Fargate artifacts (ADR-0062) ----------------------------------------
 
 # The action whose presence makes a workflow a deploy workflow. Kept in step
