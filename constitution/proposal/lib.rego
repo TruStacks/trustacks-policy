@@ -124,16 +124,6 @@ target_kind := k if {
 	k != ""
 }
 
-# ADR-0070: which Kubernetes the target is. Same rule as target_kind: absent
-# means vanilla, because every target that existed before the field is one.
-default target_distribution := "vanilla"
-
-target_distribution := d if {
-	d := input.context.target.distribution
-	is_string(d)
-	d != ""
-}
-
 target_tier := t if {
 	t := input.context.target.tier
 	is_string(t)
