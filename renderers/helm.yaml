@@ -50,10 +50,10 @@ files:
       host from `.Values.ingress.host`, `ingressClassName` only when
       `.Values.ingress.className` is set, annotations from
       `.Values.ingress.annotations`, path `/` (Prefix) to the Service. On
-      OpenShift: an Ingress cannot set the Route's HTTP→HTTPS redirect
-      (RFE-2321), an unknown `route.openshift.io/termination` value is ignored
-      and falls back to edge, and `nginx.ingress.kubernetes.io/*` annotations do
-      nothing.
+      OpenShift: the router turns a TLS-enabled Ingress (the termination
+      annotation is enough) into a Route that redirects HTTP to HTTPS, an
+      unknown `route.openshift.io/termination` value is ignored and falls back
+      to edge, and `nginx.ingress.kubernetes.io/*` annotations do nothing.
 
 # What the ArgoCD Application points at, and what it must carry.
 argocd:
