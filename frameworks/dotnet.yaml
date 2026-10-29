@@ -101,14 +101,17 @@ ci_workflow_template: |
     # with the same signed constitution the TruStacks runner uses, on every PR,
     # whoever or whatever wrote it. It verifies the bundle's keyless cosign
     # signature (trustacks-policy's publish workflow) before evaluating, uses no
-    # secret and only reads the repo. Report-only unless the caller passes
-    # `enforce: true`.
+    # secret and only reads the repo, so it runs on fork PRs too: the caller
+    # triggers on `pull_request` (never `pull_request_target`). Report-only
+    # unless the caller passes `enforce: true`.
     policy-check:
       runs-on: ubuntu-latest
       permissions:
         contents: read
       steps:
         - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+          with:
+            persist-credentials: false
         - name: TruStacks policy check
           env:
             TRUSTACKS_ENFORCE: ${{ inputs.enforce }}
@@ -117,7 +120,8 @@ ci_workflow_template: |
             # TruStacks policy check (ADR-0067 decision 3). Judges this repo's delivery
             # files (Dockerfiles, CI workflows, ECS task definitions) with the same signed
             # constitution bundle the TruStacks runner uses. Report-only unless enforce is
-            # on; it never needs a secret.
+            # on. It needs no secret and only reads the repo, so it is safe on fork PRs.
+            # It fails closed: a delivery file it could not check counts against enforce.
             BUNDLE="${TRUSTACKS_POLICY_BUNDLE:-ghcr.io/trustacks/policy/constitution:1}"
             IDENTITY='^https://github\.com/TruStacks/trustacks-policy/\.github/workflows/publish\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
             ISSUER=https://token.actions.githubusercontent.com
@@ -144,9 +148,10 @@ ci_workflow_template: |
             "$T/oras" pull -o "$T/bundle" "$PINNED" > /dev/null
             echo "Policy bundle verified: $PINNED"
 
-            python3 - "$SRC" > "$T/input.json" <<'PY'
+            # Every delivery file is either checked or listed as unchecked, never dropped.
+            python3 - "$SRC" "$T/input.json" "$T/unchecked.json" <<'PY'
             import json, os, sys
-            root = sys.argv[1]
+            root, input_path, unchecked_path = sys.argv[1:4]
             skip = {".git", "node_modules", "vendor", "dist", "build", "target", ".venv"}
             def delivery(rel):
                 parts = rel.lower().split("/")
@@ -158,20 +163,32 @@ ci_workflow_template: |
                 if len(parts) >= 3 and parts[0] == ".github" and parts[1] == "workflows":
                     return name.endswith((".yml", ".yaml"))
                 return name == "task-definition.json" or name.endswith(".task-definition.json")
-            files = []
+            files, unchecked = [], []
             for dirpath, dirs, names in os.walk(root):
                 dirs[:] = sorted(d for d in dirs if d not in skip)
                 for n in sorted(names):
                     path = os.path.join(dirpath, n)
                     rel = os.path.relpath(path, root).replace(os.sep, "/")
-                    if not delivery(rel) or len(files) >= 200 or os.path.getsize(path) > 256 * 1024:
+                    if not delivery(rel):
                         continue
-                    try:
-                        with open(path, encoding="utf-8") as fh:
-                            files.append({"path": rel, "content": fh.read()})
-                    except (OSError, UnicodeDecodeError):
-                        continue
-            json.dump({"proposal": {"files": files}, "context": {"subject": "repo", "platform_repo_url": ""}}, sys.stdout)
+                    if os.path.islink(path):
+                        unchecked.append({"path": rel, "reason": "it is a symlink"})
+                    elif len(files) >= 200:
+                        unchecked.append({"path": rel, "reason": "over the 200-file limit"})
+                    elif os.path.getsize(path) > 256 * 1024:
+                        unchecked.append({"path": rel, "reason": "larger than 256 KB"})
+                    else:
+                        try:
+                            with open(path, encoding="utf-8") as fh:
+                                files.append({"path": rel, "content": fh.read()})
+                        except UnicodeDecodeError:
+                            unchecked.append({"path": rel, "reason": "not UTF-8 text"})
+                        except OSError as exc:
+                            unchecked.append({"path": rel, "reason": f"unreadable ({exc.strerror})"})
+            with open(input_path, "w") as fh:
+                json.dump({"proposal": {"files": files}, "context": {"subject": "repo", "platform_repo_url": ""}}, fh)
+            with open(unchecked_path, "w") as fh:
+                json.dump({"checked": len(files), "unchecked": unchecked}, fh)
             PY
 
             # Only rules that declare they can judge a repo's own files (subjects: repo).
@@ -179,23 +196,44 @@ ci_workflow_template: |
               '[v | some v in data.proposal.deny; "repo" in object.get(object.get(data.proposal.rule_metadata, v.rule_id, {}), "subjects", ["proposal"])]' \
               > "$T/violations.json"
 
-            python3 - "$T/violations.json" "${TRUSTACKS_ENFORCE:-false}" <<'PY'
+            python3 - "$T/violations.json" "$T/unchecked.json" "${TRUSTACKS_ENFORCE:-false}" <<'PY'
             import json, os, sys
             violations = json.load(open(sys.argv[1]))
-            enforce = sys.argv[2].lower() == "true"
+            coverage = json.load(open(sys.argv[2]))
+            unchecked = coverage["unchecked"]
+            enforce = sys.argv[3].lower() == "true"
+            level = "error" if enforce else "warning"
             gha = os.environ.get("GITHUB_ACTIONS") == "true"
-            lines = [f"- `{v['rule_id']}`: {v['message']}" for v in violations]
+            azure = os.environ.get("TF_BUILD", "").lower() == "true"
+            def report(title, message, path=None):
+                if gha:
+                    loc = f" file={path}," if path else " "
+                    print(f"::{level}{loc}title={title}::{message}")
+                elif azure:
+                    print(f"##vso[task.logissue type={level}]{title}: {message}")
+                else:
+                    print(f"{level}: {title}: {message}")
             for v in violations:
-                print(f"::{'error' if enforce else 'warning'} title={v['rule_id']}::{v['message']}" if gha
-                      else f"{v['rule_id']}: {v['message']}")
+                report(v["rule_id"], v["message"])
+            for u in unchecked:
+                report("could not check", f"{u['path']}: {u['reason']}", u["path"])
+            line = f"Checked {coverage['checked']} delivery file(s), could not check {len(unchecked)}; {len(violations)} violation(s)."
+            print(line)
             summary = os.environ.get("GITHUB_STEP_SUMMARY")
             if summary:
                 with open(summary, "a") as fh:
-                    fh.write("### TruStacks policy check\n\n")
-                    fh.write("\n".join(lines) + "\n" if lines else "No violations.\n")
-            print(f"TruStacks policy check: {len(violations)} violation(s)"
-                  + ("" if enforce or not violations else " (report-only; set enforce to block)"))
-            sys.exit(1 if enforce and violations else 0)
+                    fh.write(f"### TruStacks policy check\n\n{line}\n\n")
+                    for v in violations:
+                        fh.write(f"- `{v['rule_id']}`: {v['message']}\n")
+                    for u in unchecked:
+                        fh.write(f"- could not check `{u['path']}`: {u['reason']}\n")
+            findings = bool(violations or unchecked)
+            if findings and enforce:
+                sys.exit(1)
+            if findings:
+                print("Report-only: set enforce to block.")
+                if azure:
+                    print("##vso[task.complete result=SucceededWithIssues;]")
             PY
 
     test:
@@ -279,8 +317,9 @@ ci_templates:
             # ADR-0067 decision 3: the TruStacks policy check, the same signed
             # constitution the runner uses, on this repo's delivery files. It
             # verifies the bundle's signature first, uses no secret, and runs
-            # with restricted logging commands. Report-only unless
-            # enforcePolicy is true.
+            # with restricted logging commands, so it is safe on fork PRs
+            # (turn on "Build pull requests from forks" to judge them).
+            # Report-only unless enforcePolicy is true.
             - job: policy_check
               displayName: TruStacks policy check
               pool:
@@ -292,7 +331,8 @@ ci_templates:
                     # TruStacks policy check (ADR-0067 decision 3). Judges this repo's delivery
                     # files (Dockerfiles, CI workflows, ECS task definitions) with the same signed
                     # constitution bundle the TruStacks runner uses. Report-only unless enforce is
-                    # on; it never needs a secret.
+                    # on. It needs no secret and only reads the repo, so it is safe on fork PRs.
+                    # It fails closed: a delivery file it could not check counts against enforce.
                     BUNDLE="${TRUSTACKS_POLICY_BUNDLE:-ghcr.io/trustacks/policy/constitution:1}"
                     IDENTITY='^https://github\.com/TruStacks/trustacks-policy/\.github/workflows/publish\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
                     ISSUER=https://token.actions.githubusercontent.com
@@ -319,9 +359,10 @@ ci_templates:
                     "$T/oras" pull -o "$T/bundle" "$PINNED" > /dev/null
                     echo "Policy bundle verified: $PINNED"
 
-                    python3 - "$SRC" > "$T/input.json" <<'PY'
+                    # Every delivery file is either checked or listed as unchecked, never dropped.
+                    python3 - "$SRC" "$T/input.json" "$T/unchecked.json" <<'PY'
                     import json, os, sys
-                    root = sys.argv[1]
+                    root, input_path, unchecked_path = sys.argv[1:4]
                     skip = {".git", "node_modules", "vendor", "dist", "build", "target", ".venv"}
                     def delivery(rel):
                         parts = rel.lower().split("/")
@@ -333,20 +374,32 @@ ci_templates:
                         if len(parts) >= 3 and parts[0] == ".github" and parts[1] == "workflows":
                             return name.endswith((".yml", ".yaml"))
                         return name == "task-definition.json" or name.endswith(".task-definition.json")
-                    files = []
+                    files, unchecked = [], []
                     for dirpath, dirs, names in os.walk(root):
                         dirs[:] = sorted(d for d in dirs if d not in skip)
                         for n in sorted(names):
                             path = os.path.join(dirpath, n)
                             rel = os.path.relpath(path, root).replace(os.sep, "/")
-                            if not delivery(rel) or len(files) >= 200 or os.path.getsize(path) > 256 * 1024:
+                            if not delivery(rel):
                                 continue
-                            try:
-                                with open(path, encoding="utf-8") as fh:
-                                    files.append({"path": rel, "content": fh.read()})
-                            except (OSError, UnicodeDecodeError):
-                                continue
-                    json.dump({"proposal": {"files": files}, "context": {"subject": "repo", "platform_repo_url": ""}}, sys.stdout)
+                            if os.path.islink(path):
+                                unchecked.append({"path": rel, "reason": "it is a symlink"})
+                            elif len(files) >= 200:
+                                unchecked.append({"path": rel, "reason": "over the 200-file limit"})
+                            elif os.path.getsize(path) > 256 * 1024:
+                                unchecked.append({"path": rel, "reason": "larger than 256 KB"})
+                            else:
+                                try:
+                                    with open(path, encoding="utf-8") as fh:
+                                        files.append({"path": rel, "content": fh.read()})
+                                except UnicodeDecodeError:
+                                    unchecked.append({"path": rel, "reason": "not UTF-8 text"})
+                                except OSError as exc:
+                                    unchecked.append({"path": rel, "reason": f"unreadable ({exc.strerror})"})
+                    with open(input_path, "w") as fh:
+                        json.dump({"proposal": {"files": files}, "context": {"subject": "repo", "platform_repo_url": ""}}, fh)
+                    with open(unchecked_path, "w") as fh:
+                        json.dump({"checked": len(files), "unchecked": unchecked}, fh)
                     PY
 
                     # Only rules that declare they can judge a repo's own files (subjects: repo).
@@ -354,23 +407,44 @@ ci_templates:
                       '[v | some v in data.proposal.deny; "repo" in object.get(object.get(data.proposal.rule_metadata, v.rule_id, {}), "subjects", ["proposal"])]' \
                       > "$T/violations.json"
 
-                    python3 - "$T/violations.json" "${TRUSTACKS_ENFORCE:-false}" <<'PY'
+                    python3 - "$T/violations.json" "$T/unchecked.json" "${TRUSTACKS_ENFORCE:-false}" <<'PY'
                     import json, os, sys
                     violations = json.load(open(sys.argv[1]))
-                    enforce = sys.argv[2].lower() == "true"
+                    coverage = json.load(open(sys.argv[2]))
+                    unchecked = coverage["unchecked"]
+                    enforce = sys.argv[3].lower() == "true"
+                    level = "error" if enforce else "warning"
                     gha = os.environ.get("GITHUB_ACTIONS") == "true"
-                    lines = [f"- `{v['rule_id']}`: {v['message']}" for v in violations]
+                    azure = os.environ.get("TF_BUILD", "").lower() == "true"
+                    def report(title, message, path=None):
+                        if gha:
+                            loc = f" file={path}," if path else " "
+                            print(f"::{level}{loc}title={title}::{message}")
+                        elif azure:
+                            print(f"##vso[task.logissue type={level}]{title}: {message}")
+                        else:
+                            print(f"{level}: {title}: {message}")
                     for v in violations:
-                        print(f"::{'error' if enforce else 'warning'} title={v['rule_id']}::{v['message']}" if gha
-                              else f"{v['rule_id']}: {v['message']}")
+                        report(v["rule_id"], v["message"])
+                    for u in unchecked:
+                        report("could not check", f"{u['path']}: {u['reason']}", u["path"])
+                    line = f"Checked {coverage['checked']} delivery file(s), could not check {len(unchecked)}; {len(violations)} violation(s)."
+                    print(line)
                     summary = os.environ.get("GITHUB_STEP_SUMMARY")
                     if summary:
                         with open(summary, "a") as fh:
-                            fh.write("### TruStacks policy check\n\n")
-                            fh.write("\n".join(lines) + "\n" if lines else "No violations.\n")
-                    print(f"TruStacks policy check: {len(violations)} violation(s)"
-                          + ("" if enforce or not violations else " (report-only; set enforce to block)"))
-                    sys.exit(1 if enforce and violations else 0)
+                            fh.write(f"### TruStacks policy check\n\n{line}\n\n")
+                            for v in violations:
+                                fh.write(f"- `{v['rule_id']}`: {v['message']}\n")
+                            for u in unchecked:
+                                fh.write(f"- could not check `{u['path']}`: {u['reason']}\n")
+                    findings = bool(violations or unchecked)
+                    if findings and enforce:
+                        sys.exit(1)
+                    if findings:
+                        print("Report-only: set enforce to block.")
+                        if azure:
+                            print("##vso[task.complete result=SucceededWithIssues;]")
                     PY
                   displayName: TruStacks policy check
                   target:

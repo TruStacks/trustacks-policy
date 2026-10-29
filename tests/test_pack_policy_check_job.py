@@ -91,3 +91,40 @@ def test_the_github_workflow_still_passes_the_pinning_rule(pack_path: Path) -> N
     result = json.loads(proc.stdout)["result"]
     denied = {v["rule_id"] for v in result[0]["expressions"][0]["value"]} if result else set()
     assert "practice.workflow_pins_action_versions" not in denied
+
+
+def test_the_github_checkout_does_not_persist_credentials() -> None:
+    """Fork-safe: no token stays on disk for later steps."""
+    for path in FRAMEWORK_PACKS:
+        steps = _github(path)["jobs"]["policy-check"]["steps"]
+        checkout = next(s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@"))
+        assert checkout["with"]["persist-credentials"] is False, path.name
+
+
+def test_a_file_it_cannot_check_fails_enforce(tmp_path: Path) -> None:
+    """Fail closed (review on trustacks-mvp#795): never drop a delivery file silently."""
+    script = next(
+        s["run"] for s in _github(FRAMEWORK_PACKS[0])["jobs"]["policy-check"]["steps"] if "run" in s
+    )
+    collector, reporter = (b.split("\nPY\n", 1)[0] for b in script.split("<<'PY'\n")[1:])
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "Dockerfile").write_text("FROM x\nUSER 1001\n")
+    (repo / "latin1.dockerfile").write_bytes(b"FROM x\n# caf\xe9\n")
+    inp, unchecked, violations = (tmp_path / n for n in ("in.json", "un.json", "v.json"))
+    subprocess.run(
+        ["python3", "-", str(repo), str(inp), str(unchecked)], input=collector, text=True, check=True
+    )
+    assert [u["path"] for u in json.loads(unchecked.read_text())["unchecked"]] == [
+        "latin1.dockerfile"
+    ]
+    violations.write_text("[]")
+    enforced = subprocess.run(
+        ["python3", "-", str(violations), str(unchecked), "true"],
+        input=reporter,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert enforced.returncode == 1
+    assert "could not check 1" in enforced.stdout
