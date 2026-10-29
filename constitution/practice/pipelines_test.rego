@@ -237,3 +237,38 @@ test_has_workflow_follows_the_runtime if {
 	gh_only := pl_input([{"path": ".github/workflows/ci.yaml", "content": ""}], {"context": {"ci_runtime": "azure_pipelines"}})
 	"proposal.has_workflow" in pl_denied(gh_only)
 }
+
+# ---- an unsupported CI runtime fails closed --------------------------------------------
+
+test_an_unsupported_ci_runtime_is_denied_and_opens_no_paths if {
+	inp := pl_input(
+		[{"path": ".gitlab-ci.yml", "content": ""}, {"path": "anything/at/all.yml", "content": ""}],
+		{"context": {"ci_runtime": "gitlab_ci"}},
+	)
+	msgs := pl_messages(inp, "proposal.allowed_paths")
+	some m in msgs
+	contains(m, "unsupported CI runtime gitlab_ci")
+	some n in msgs
+	contains(n, "anything/at/all.yml")
+	proposal.ci_runtime == "github_actions" with input as inp
+	proposal.allowed_prefixes == ["gitops/", "argo-apps/", ".github/workflows/"] with input as inp
+}
+
+test_a_non_string_ci_runtime_is_denied if {
+	inp := pl_input([], {"context": {"ci_runtime": 7}})
+	some m in pl_messages(inp, "proposal.allowed_paths")
+	contains(m, "unsupported CI runtime")
+}
+
+test_supported_ci_runtimes_raise_no_runtime_denial if {
+	every r in ["github_actions", "azure_pipelines"] {
+		inp := pl_input([], {"context": {"ci_runtime": r}})
+		count([m | some m in pl_messages(inp, "proposal.allowed_paths"); contains(m, "unsupported")]) == 0
+	}
+}
+
+test_prod_environment_rule_covers_both_kinds if {
+	meta := proposal.rule_metadata["practice.workflow_prod_deploy_requires_environment"]
+	meta.target_kinds == ["ecs-fargate", "kubernetes"]
+	contains(meta.description, "Azure Pipelines deployment job")
+}

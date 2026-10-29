@@ -173,10 +173,21 @@ runner_capability(name) if {
 
 default ci_runtime := "github_actions"
 
+# The runtimes the constitution knows how to judge. Anything else reads as the
+# default, which opens only `.github/workflows/`, never an arbitrary location,
+# and `proposal.allowed_paths` denies the proposal outright so the unknown
+# value is visible rather than quietly treated as GitHub Actions.
+supported_ci_runtimes := {"github_actions", "azure_pipelines"}
+
 ci_runtime := r if {
 	r := input.context.ci_runtime
-	is_string(r)
-	r != ""
+	r in supported_ci_runtimes
+}
+
+# The runner named a CI runtime the constitution doesn't support.
+unsupported_ci_runtime := r if {
+	r := input.context.ci_runtime
+	not r in supported_ci_runtimes
 }
 
 # An Azure Pipelines file, by location: `azure-pipelines.yml` at the root or a

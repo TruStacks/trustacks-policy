@@ -40,6 +40,19 @@ is_allowed_path(path) if {
 	path == file
 }
 
+# Fail closed on a CI runtime the constitution doesn't know: deny, naming it,
+# rather than judge the proposal's pipeline paths as if it were GitHub Actions.
+deny contains msg if {
+	r := unsupported_ci_runtime
+	msg := {
+		"rule_id": "proposal.allowed_paths",
+		"message": sprintf(
+			"unsupported CI runtime %v; this policy judges %v",
+			[r, sort([x | some x in supported_ci_runtimes])],
+		),
+	}
+}
+
 deny contains msg if {
 	some f in input.proposal.files
 	not is_allowed_path(f.path)

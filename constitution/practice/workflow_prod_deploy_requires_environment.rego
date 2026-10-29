@@ -27,11 +27,13 @@ package proposal
 import rego.v1
 
 rule_metadata["practice.workflow_prod_deploy_requires_environment"] := {
-	"description": "On a prod-tier target, every job that deploys (aws-actions/amazon-ecs-deploy-task-definition) declares a GitHub environment. Presence only: the environment's reviewers are not verified.",
+	"description": "On a prod-tier target, every job that deploys names an environment: a GitHub Actions job running aws-actions/amazon-ecs-deploy-task-definition, or an Azure Pipelines deployment job. Presence only: the environment's approvals and reviewers are not verified.",
 	"required_tooling_categories": [],
 	"practice_dimensions": [],
 	"tier_scope": ["prod"],
-	"target_kinds": ["ecs-fargate"],
+	# ECS Fargate deploys through the GitHub workflow (ADR-0062); an Azure
+	# `deployment:` job can deploy to either kind (ADR-0071, ADR-0069).
+	"target_kinds": ["ecs-fargate", "kubernetes"],
 }
 
 deny contains msg if {
