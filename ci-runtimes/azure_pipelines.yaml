@@ -1,0 +1,104 @@
+# Azure Pipelines CI runtime pack (ADR-0071 §3–§4).
+#
+# What the DevOps Engineer writes when the customer's Stack file declares
+# `ci_cd_platform: azure_pipelines`. Framework packs keep the application idiom
+# (build, test and lint commands) and carry an `azure_pipelines` template under
+# `ci_templates`; this pack carries what is the same for every framework on
+# Azure: where the files go, how the service repo consumes them, which tasks
+# may be used, and what the customer has to set up outside YAML.
+#
+# GitHub Actions is the default runtime and has no pack: its shape lives in the
+# framework packs' `ci_workflow_template`.
+ci_runtime: azure_pipelines
+display_name: Azure Pipelines
+
+# The shared pipeline is an `extends` template in the PLATFORM repo. Microsoft:
+# "For the most secure pipelines, start by using extends templates", and only
+# `extends` works with the Required template check, so a pipeline that skips
+# the template can't use the registry or prod connections.
+# https://learn.microsoft.com/en-us/azure/devops/pipelines/security/templates
+paths:
+  # One extends root per service; a platform repo holds every service in the
+  # Application, so a shared `ci.yml` would collide.
+  template: azure-pipelines/templates/ci-{service}.yml
+  # Included only from inside the root. The step rules judge the root, not
+  # these fragments.
+  step_templates: azure-pipelines/templates/steps/
+  # Non-GitOps delivery only (ADR-0069 push / ADR-0062): a `deployment:` job
+  # naming `environment:`.
+  deploy: azure-pipelines/deploy-{service}.yml
+
+# The pipeline the customer adds to the SERVICE repo, once. TruStacks never
+# writes there; the PR body shows this snippet. `ref` pins the template to a
+# platform-repo commit (Microsoft documents SHA pinning for `type: git`
+# repository resources): replace it with this PR's merge commit once merged.
+# If a SHA doesn't resolve in the customer's org, a human creates an annotated
+# tag instead, with Force push denied on All tags; the TruStacks identity never
+# creates the tag, because a tag's creator inherits Force push on it.
+# https://learn.microsoft.com/en-us/azure/devops/pipelines/process/templates
+# https://learn.microsoft.com/en-us/azure/devops/repos/git/git-tags
+caller:
+  path: azure-pipelines.yml
+  template: |
+    # azure-pipelines.yml in the SERVICE repo. Register it as a pipeline once.
+    trigger:
+      branches:
+        include:
+          - main
+    resources:
+      repositories:
+        - repository: platform
+          type: git
+          name: <project>/<platform-repo>
+          ref: <platform-commit-sha>
+    extends:
+      template: azure-pipelines/templates/ci-<service>.yml@platform
+      parameters:
+        containerRegistry: <registry-service-connection>
+
+# Built-in tasks only, each at a FULL version. A task version is a name, not a
+# content hash, and tasks retire, so this is version-pinned rather than
+# immutable; the docs say so. Without a full version, "Pipelines automatically
+# update to use new minor task versions."
+# https://learn.microsoft.com/en-us/azure/devops/pipelines/process/tasks
+# `recommended` comes from the task's task.json on the azure-pipelines-tasks
+# master branch (2026-10-29). Microsoft rolls versions out gradually and "you
+# can only use task versions that exist for your organization", so the gate
+# requires a full version and an allowlisted name, not this exact one.
+tasks:
+  - name: Docker
+    major: 2
+    recommended: 2.282.0
+    purpose: build and push the image through a workload-identity registry service connection
+    source: https://raw.githubusercontent.com/microsoft/azure-pipelines-tasks/master/Tasks/DockerV2/task.json
+    verified_in_org: false
+  - name: PublishTestResults
+    major: 2
+    recommended: 2.282.0
+    purpose: publish JUnit/TRX test results so they show on the run
+    source: https://raw.githubusercontent.com/microsoft/azure-pipelines-tasks/master/Tasks/PublishTestResultsV2/task.json
+    verified_in_org: false
+
+# Everything else (language toolchains, linters, scanners) runs as script steps
+# inside job containers pinned by digest (`image@sha256:`), never a tag.
+image_pinning: digest
+
+# What the customer sets up outside YAML. The PR body lists these, because a
+# YAML file can't do them and TruStacks can't verify them from YAML.
+setup_checklist:
+  - Register the service repo's `azure-pipelines.yml` as a pipeline in its project.
+  - Give the service project's Build Service identity Read on the platform repo, so it can load the template.
+  - Create the registry service connection with workload identity federation (no secret), and name it in the caller's `containerRegistry` parameter.
+  - Add a Required template check on the registry service connection, and on the prod environment, naming this template.
+  - Add approvals to the prod environment.
+  - Turn on "Limit job authorization scope" and "Protect access to repositories in YAML pipelines".
+  - Disable Marketplace tasks for the organization (Organization settings → Pipelines → Task restrictions).
+  - Protect the platform repo's default branch with required reviewers.
+
+# Read through the REST API and labelled observed, never asserted from YAML.
+cannot_verify:
+  - Environment approvals and checks (they aren't defined in YAML).
+  - Required template checks on service connections and environments.
+  - Branch policies and required reviewers on the platform repo.
+  - Job authorization scope and repository-protection settings.
+  - Tag permissions on the platform repo.

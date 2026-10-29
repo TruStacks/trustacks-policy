@@ -1,60 +1,68 @@
 # CI runtime packs
 
-CI runtime packs let the TruStacks DevOps Engineer agent emit CI workflow content in formats other than GitHub Actions. Each pack maps a generic CI workflow shape (build, test, lint, scan, sign, deploy) onto a specific runtime's syntax.
+CI runtime packs let the TruStacks DevOps Engineer agent emit CI pipelines in formats other than GitHub Actions. A pack describes what is the same for every framework on one CI system: where the pipeline files go, how the service repo consumes them, which tasks may be used and at what version, and what the customer has to set up outside YAML.
 
-This directory is the open-source home for community-contributed CI runtime packs.
+Framework packs (`frameworks/`) describe what the *application* looks like and carry one reference pipeline per runtime. CI runtime packs describe the *automation*. The two are orthogonal: a Spring Boot service can run on GitHub Actions or Azure Pipelines.
 
----
+**GitHub Actions is the default runtime and has no pack.** Its shape lives in each framework pack's `ci_workflow_template`.
 
-## Status — bootstrap
+## Status
 
-This directory is **empty by design** as of repository bootstrap. The TruStacks agent today emits **GitHub Actions** workflows only. GitLab CI, Azure DevOps, Tekton, and Dagger packs are queued in the product roadmap as Slices 27–30 (post-Beta).
+| Runtime | Pack | Runner support |
+|---|---|---|
+| Azure Pipelines | [`azure_pipelines.yaml`](azure_pipelines.yaml) | trustacks-mvp ADR-0071 step 4b |
+| GitLab CI | — | next (ADR-0071 §5) |
+| Tekton, Dagger | — | on demand |
 
-The first contribution windows will open when:
+A runtime is used for a proposal only when the customer's Stack file declares it as the primary `ci_cd_platform` **and** the runner has its pack. Anything else gets GitHub Actions.
 
-- **GitLab CI pack** — when the product runner gains the multi-format-emit capability (Slice 28 of the trustacks-mvp roadmap).
-- **Azure DevOps pack** — same dependency (Slice 27).
-- **Tekton pack** — same dependency (Slice 29).
-- **Dagger pack** — same dependency (Slice 30, lower priority).
+## Schema
 
-A community contribution to this directory before the runner-side support lands is welcome but won't ship to customers until the product side catches up. Expect the pack format to evolve during that window.
-
----
-
-## Why this is its own layer
-
-Framework packs (`frameworks/`) describe what the *application* looks like. CI runtime packs describe what the *automation* looks like. The two are orthogonal — a Spring Boot service can run on GitHub Actions or GitLab CI; a GitLab CI pack should work for any framework. Splitting them keeps each pack small and contributable independently.
-
----
-
-## What a pack will look like (preview)
-
-The format is not yet locked. The expected shape, drawn from the framework pack pattern:
+The file name is the runtime id (`azure_pipelines.yaml` holds `ci_runtime: azure_pipelines`). A pack is rejected, not skipped, when it doesn't match this schema.
 
 ```yaml
-ci_runtime: gitlab_ci
-display_name: GitLab CI
-detection:
-  - file_present: [.gitlab-ci.yml]
-  - profile_declares_ci_runtime: gitlab_ci
+ci_runtime: azure_pipelines        # matches the file name; never github_actions
+display_name: Azure Pipelines
 
-# Templates per common workflow shape. The agent picks the
-# right template based on the customer's framework + tooling.
-templates:
-  build_test_lint:
-    file_path: .gitlab-ci.yml
-    content: |
-      ...
-  build_scan_sign:
-    file_path: .gitlab-ci.yml
-    content: |
-      ...
+paths:                              # relative to the platform repo root
+  template: azure-pipelines/templates/ci-{service}.yml   # one per service; {service} required
+  step_templates: azure-pipelines/templates/steps/       # fragments included only from the template
+  deploy: azure-pipelines/deploy-{service}.yml           # non-GitOps delivery; {service} required
+
+caller:                             # shown in the PR body for the SERVICE repo, never written
+  path: azure-pipelines.yml
+  template: |
+    ...                             # <service> is filled in by the runner
+
+tasks:                              # the only tasks the agent may use
+  - name: Docker
+    major: 2
+    recommended: 2.282.0            # a full X.Y.Z version
+    purpose: ...
+    source: <where the version came from>
+    verified_in_org: false          # true once seen working in a real organization
+
+image_pinning: digest               # every container image is image@sha256:<64 hex>
+
+setup_checklist:                    # what the customer sets up outside YAML; listed in the PR body
+  - ...
+
+cannot_verify:                      # read through the API and labelled observed, never asserted
+  - ...
 ```
 
-A canonical schema lands when Slice 27 (Azure DevOps, the first non-GitHub-Actions runtime) lands in the product. Until then, this README is a placeholder.
+A framework pack adds its reference pipeline for the runtime under `ci_templates`, keyed by runtime id. The key is additive: a loader that predates it reads the pack exactly as before.
 
----
+```yaml
+ci_templates:
+  azure_pipelines: |
+    ...
+```
+
+## What the gate checks
+
+The constitution judges every runtime's pipelines on one neutral model (`input.proposal.pipelines`), so the test, lint and prod-environment rules mean the same thing everywhere. Pinning is per runtime: for Azure Pipelines, a task must name a full version and a container must be pinned by digest. `tests/test_pack_workflows_pass_the_constitution.py` runs every framework pack's template for every runtime through those rules.
 
 ## Contributing
 
-Wait for the schema to land before contributing a full pack. If you want to help shape it earlier, open a GitHub issue with the `discussion` label describing your CI runtime + the workflow shapes your team uses. We'll fold that into the schema design.
+A new runtime needs, in one change: the runtime pack, a template in each framework pack, runner support in trustacks-mvp (a normaliser in `policy/pipelines.py` and a prompt addendum), and the pinning rule for its step references. Open an issue first; the shape of "pinned" differs a lot between CI systems.
