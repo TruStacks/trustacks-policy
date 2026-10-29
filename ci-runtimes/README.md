@@ -11,7 +11,7 @@ Framework packs (`frameworks/`) describe what the *application* looks like and c
 | Runtime | Pack | Runner support |
 |---|---|---|
 | Azure Pipelines | [`azure_pipelines.yaml`](azure_pipelines.yaml) | trustacks-mvp ADR-0071 step 4b |
-| GitLab CI | — | next (ADR-0071 §5) |
+| GitLab CI | [`gitlab_ci.yaml`](gitlab_ci.yaml) | trustacks-mvp ADR-0071 decision 5 (`tasks: []`: every step is a script line in a digest-pinned image) |
 | Tekton, Dagger | — | on demand |
 
 A runtime is used for a proposal only when the customer's Stack file declares it as the primary `ci_cd_platform` **and** the runner has its pack. Anything else gets GitHub Actions.

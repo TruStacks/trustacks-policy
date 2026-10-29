@@ -177,7 +177,7 @@ default ci_runtime := "github_actions"
 # default, which opens only `.github/workflows/`, never an arbitrary location,
 # and `proposal.allowed_paths` denies the proposal outright so the unknown
 # value is visible rather than quietly treated as GitHub Actions.
-supported_ci_runtimes := {"github_actions", "azure_pipelines"}
+supported_ci_runtimes := {"github_actions", "azure_pipelines", "gitlab_ci"}
 
 ci_runtime := r if {
 	r := input.context.ci_runtime
@@ -201,6 +201,18 @@ _is_azure_pipeline_path(path) if {
 
 _is_azure_pipeline_path(path) if {
 	startswith(path, "azure-pipelines/")
+	endswith(path, ".yaml")
+}
+
+# A GitLab CI file a proposal may write: a YAML file under `.gitlab/ci/`. The
+# platform repo's own root `.gitlab-ci.yml` is the customer's, never ours.
+_is_gitlab_pipeline_path(path) if {
+	startswith(path, ".gitlab/ci/")
+	endswith(path, ".yml")
+}
+
+_is_gitlab_pipeline_path(path) if {
+	startswith(path, ".gitlab/ci/")
 	endswith(path, ".yaml")
 }
 

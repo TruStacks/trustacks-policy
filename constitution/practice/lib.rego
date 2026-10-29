@@ -32,8 +32,9 @@ _is_dockerfile(path) if path == "Dockerfile"
 #
 # The CI pipelines in this proposal, in the neutral model the runner builds
 # (`input.proposal.pipelines`): one entry per pipeline file with its path, its
-# runtime (`github_actions`, `azure_pipelines`), and its jobs and steps. The
-# universal practice rules read this, so they judge any runtime the same way.
+# runtime (`github_actions`, `azure_pipelines`, `gitlab_ci`), and its jobs and
+# steps. The universal practice rules read this, so they judge any runtime the
+# same way.
 #
 # When the runner sent no model (a runner older than ADR-0071), the model is
 # built here from the raw GitHub Actions YAML, the only runtime such a runner
@@ -90,8 +91,9 @@ _github_environment_name(job) := trim_space(job.environment) if {
 } else := null
 
 # A pipeline that only deploys: the GitHub workflow that runs the ECS deploy
-# action (ADR-0062), or an Azure pipeline whose every job is a `deployment:`
-# job. It applies an artifact; it has no suite to run.
+# action (ADR-0062), an Azure pipeline whose every job is a `deployment:` job,
+# or a GitLab pipeline whose every job names an `environment:`. It applies an
+# artifact; it has no suite to run.
 _pipeline_is_deploy(p) if {
 	p.runtime == "github_actions"
 	some job in p.jobs
@@ -99,7 +101,7 @@ _pipeline_is_deploy(p) if {
 }
 
 _pipeline_is_deploy(p) if {
-	p.runtime == "azure_pipelines"
+	p.runtime in {"azure_pipelines", "gitlab_ci"}
 	count(p.jobs) > 0
 	every job in p.jobs {
 		job.kind == "deployment"
@@ -117,6 +119,20 @@ _pipeline_is_fragment(p) if {
 _pipeline_is_fragment(p) if {
 	p.runtime == "azure_pipelines"
 	is_string(p.extends)
+	count(p.jobs) == 0
+}
+
+# GitLab step templates (`.gitlab/ci/steps/`) are included only from the
+# template, and a file that only `include:`s has no jobs of its own: both are
+# judged through the template that holds the jobs.
+_pipeline_is_fragment(p) if {
+	p.runtime == "gitlab_ci"
+	startswith(p.path, ".gitlab/ci/steps/")
+}
+
+_pipeline_is_fragment(p) if {
+	p.runtime == "gitlab_ci"
+	count(object.get(p, "includes", [])) > 0
 	count(p.jobs) == 0
 }
 

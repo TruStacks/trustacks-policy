@@ -15,7 +15,9 @@
 # step must name a FULL version (`Name@X.Y.Z`; `@2` silently takes new minor
 # versions), and every container a job or step runs in must be pinned by
 # digest (`@sha256:` and 64 hex). A full task version is version-pinned, not
-# immutable: the docs and the PR body say so.
+# immutable: the docs and the PR body say so. GitLab CI: no tasks; every job
+# and service image is pinned by digest, and every `include:` names a commit
+# SHA (or is `local`, this repo at this commit).
 
 package proposal
 
@@ -102,6 +104,56 @@ _azure_pipeline_images(p) := {image |
 	some job in p.jobs
 	some step in job.steps
 	image := step.image
+	is_string(image)
+}
+
+# GitLab CI: every image a job or its services run in is pinned by digest.
+deny contains msg if {
+	some p in _pipelines
+	p.runtime == "gitlab_ci"
+	some image in _gitlab_pipeline_images(p)
+	not regex.match(`@sha256:[0-9a-f]{64}$`, image)
+	msg := {
+		"rule_id": "practice.workflow_pins_action_versions",
+		"message": sprintf(
+			"pipeline %v: image `%v` should be pinned by digest (image@sha256:...), not a tag",
+			[p.path, image],
+		),
+	}
+}
+
+# GitLab CI: an include names a ref that can't move. `local` is this repo at
+# this commit; `project` and `component` must name a full commit SHA; `remote`
+# and `template` have no ref at all.
+deny contains msg if {
+	some p in _pipelines
+	p.runtime == "gitlab_ci"
+	some inc in object.get(p, "includes", [])
+	not _gitlab_include_pinned(inc)
+	msg := {
+		"rule_id": "practice.workflow_pins_action_versions",
+		"message": sprintf(
+			"pipeline %v: `include: %v` (%v) should name a full 40-character commit SHA; a branch, tag or URL can change under the same name",
+			[p.path, inc.kind, inc.location],
+		),
+	}
+}
+
+_gitlab_include_pinned(inc) if inc.kind == "local"
+
+_gitlab_include_pinned(inc) if {
+	inc.kind in {"project", "component"}
+	is_string(inc.ref)
+	regex.match(`^[0-9a-f]{40}$`, inc.ref)
+}
+
+_gitlab_pipeline_images(p) := {image |
+	some job in p.jobs
+	image := job.image
+	is_string(image)
+} | {image |
+	some job in p.jobs
+	some image in object.get(job, "services", [])
 	is_string(image)
 }
 

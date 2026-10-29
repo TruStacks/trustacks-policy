@@ -14,6 +14,7 @@ still pass `practice.workflow_pins_action_versions`; that half needs a real
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -52,6 +53,22 @@ def test_both_runtimes_ship_a_read_only_policy_check(pack_path: Path) -> None:
     assert step["target"]["commands"] == "restricted"
 
 
+def _gitlab(path: Path) -> dict[str, Any]:
+    return yaml.safe_load(_pack(path)["ci_templates"]["gitlab_ci"])
+
+
+@pytest.mark.parametrize("pack_path", FRAMEWORK_PACKS, ids=lambda p: p.stem)
+def test_the_gitlab_policy_check_is_read_only_and_report_only(pack_path: Path) -> None:
+    """Fetch only, no variable but the enforce switch, findings exit 3 (a warning)."""
+    doc = _gitlab(pack_path)
+    job = doc["policy_check"]
+    assert job["variables"]["GIT_STRATEGY"] == "fetch"
+    assert set(job["variables"]) == {"GIT_STRATEGY", "GIT_DEPTH", "TRUSTACKS_ENFORCE"}
+    assert job["allow_failure"] == {"exit_codes": [3]}
+    assert doc["variables"] == {"TRUSTACKS_ENFORCE_POLICY": "false"}
+    assert "only" not in job and "except" not in job
+
+
 def test_the_script_is_identical_and_verifies_this_repos_signature() -> None:
     scripts = set()
     for path in FRAMEWORK_PACKS:
@@ -59,6 +76,7 @@ def test_the_script_is_identical_and_verifies_this_repos_signature() -> None:
         scripts.add(next(s["run"] for s in gh if "run" in s))
         az = _azure_policy_job(path)["steps"]
         scripts.add(next(s["script"] for s in az if "script" in s))
+        scripts.add(_gitlab(path)["policy_check"]["script"][0])
     assert len(scripts) == 1
     script = scripts.pop()
     assert IDENTITY in script
@@ -128,3 +146,15 @@ def test_a_file_it_cannot_check_fails_enforce(tmp_path: Path) -> None:
     )
     assert enforced.returncode == 1
     assert "could not check 1" in enforced.stdout
+
+    # On GitLab, report-only findings exit 3, which `allow_failure: exit_codes`
+    # shows as a warning rather than a pass that hides them.
+    on_gitlab = subprocess.run(
+        ["python3", "-", str(violations), str(unchecked), "false"],
+        input=reporter,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={"PATH": os.environ.get("PATH", ""), "GITLAB_CI": "true"},
+    )
+    assert on_gitlab.returncode == 3

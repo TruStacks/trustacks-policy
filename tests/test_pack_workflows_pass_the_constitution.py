@@ -219,3 +219,94 @@ def test_the_azure_rules_really_judge_the_template() -> None:
     denied = _azure_deny_rule_ids(broken)
     assert "practice.workflow_has_test_step" in denied
     assert "practice.workflow_pins_action_versions" in denied
+
+
+# ---- GitLab CI (ADR-0071 decision 5) --------------------------------------
+#
+# The same promise for the packs' GitLab CI templates, judged on the neutral
+# model. `_gitlab_model` reads the shape the packs emit: top-level jobs (not
+# global keywords, not hidden `.` jobs), their script lines as runs, and their
+# image and services.
+
+GITLAB_PATH = ".gitlab/ci/ci-svc.yml"
+_GITLAB_GLOBAL_KEYS = {
+    "default", "include", "stages", "variables", "workflow", "spec",
+    "image", "services", "cache", "before_script", "after_script",
+}  # fmt: skip
+
+
+def _gitlab_model(path: str, content: str) -> dict[str, object]:
+    doc = yaml.safe_load(content)
+    jobs = []
+    for name, job in doc.items():
+        if name in _GITLAB_GLOBAL_KEYS or name.startswith(".") or not isinstance(job, dict):
+            continue
+        env = job.get("environment")
+        lines = [job[k] for k in ("before_script", "script", "after_script") if k in job]
+        jobs.append(
+            {
+                "name": name,
+                "kind": "deployment" if env else "job",
+                "environment": env,
+                "image": job.get("image"),
+                "services": job.get("services", []),
+                "steps": [{"run": line} for group in lines for line in group],
+            }
+        )
+    return {
+        "path": path,
+        "runtime": "gitlab_ci",
+        "extends": None,
+        "includes": [],
+        "triggers": ["push"],
+        "jobs": jobs,
+    }
+
+
+def _gitlab_deny_rule_ids(content: str) -> set[str]:
+    payload = {
+        "proposal": {
+            "files": [{"path": GITLAB_PATH, "content": content}],
+            "pipelines": [_gitlab_model(GITLAB_PATH, content)],
+        },
+        "context": {
+            "platform_repo_url": "https://example.invalid/acme/platform",
+            "ci_runtime": "gitlab_ci",
+        },
+    }
+    proc = subprocess.run(
+        ["opa", "eval", "-d", str(CONSTITUTION), "-I", "data.proposal.deny", "--format", "json"],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    result = json.loads(proc.stdout)["result"]
+    if not result:
+        return set()
+    return {v["rule_id"] for v in result[0]["expressions"][0]["value"]}
+
+
+@pytest.mark.parametrize("pack_path", FRAMEWORK_PACKS, ids=lambda p: p.stem)
+def test_the_packs_gitlab_ci_template_passes_the_gate(pack_path: Path) -> None:
+    pack = yaml.safe_load(pack_path.read_text(encoding="utf-8"))
+    template = (pack.get("ci_templates") or {}).get("gitlab_ci")
+    assert template, f"{pack_path.name} ships no GitLab CI template"
+    gate = AZURE_PRACTICE_RULES | {"proposal.allowed_paths", "proposal.has_workflow"}
+    denied = _gitlab_deny_rule_ids(template) & gate
+    assert not denied, (
+        f"{pack_path.name}'s GitLab CI template is denied by {sorted(denied)}. "
+        "The agent following this pack cannot produce a proposal that passes."
+    )
+
+
+def test_the_gitlab_rules_really_judge_the_template() -> None:
+    """Without its test command, and with the SDK image by tag, the template is denied."""
+    pack = yaml.safe_load((REPO_ROOT / "frameworks" / "dotnet.yaml").read_text(encoding="utf-8"))
+    template = pack["ci_templates"]["gitlab_ci"]
+    digest = "@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b"
+    assert digest in template
+    denied = _gitlab_deny_rule_ids(template.replace("dotnet test", "dotnet pack").replace(digest, ""))
+    assert "practice.workflow_has_test_step" in denied
+    assert "practice.workflow_pins_action_versions" in denied

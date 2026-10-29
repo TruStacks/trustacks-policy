@@ -242,12 +242,12 @@ test_has_workflow_follows_the_runtime if {
 
 test_an_unsupported_ci_runtime_is_denied_and_opens_no_paths if {
 	inp := pl_input(
-		[{"path": ".gitlab-ci.yml", "content": ""}, {"path": "anything/at/all.yml", "content": ""}],
-		{"context": {"ci_runtime": "gitlab_ci"}},
+		[{"path": "Jenkinsfile", "content": ""}, {"path": "anything/at/all.yml", "content": ""}],
+		{"context": {"ci_runtime": "jenkins"}},
 	)
 	msgs := pl_messages(inp, "proposal.allowed_paths")
 	some m in msgs
-	contains(m, "unsupported CI runtime gitlab_ci")
+	contains(m, "unsupported CI runtime jenkins")
 	some n in msgs
 	contains(n, "anything/at/all.yml")
 	proposal.ci_runtime == "github_actions" with input as inp
@@ -261,10 +261,115 @@ test_a_non_string_ci_runtime_is_denied if {
 }
 
 test_supported_ci_runtimes_raise_no_runtime_denial if {
-	every r in ["github_actions", "azure_pipelines"] {
+	every r in ["github_actions", "azure_pipelines", "gitlab_ci"] {
 		inp := pl_input([], {"context": {"ci_runtime": r}})
 		count([m | some m in pl_messages(inp, "proposal.allowed_paths"); contains(m, "unsupported")]) == 0
 	}
+}
+
+# ---- GitLab CI (ADR-0071 decision 5) ----------------------------------------------------
+
+pl_gitlab(path, jobs, includes) := {"path": path, "runtime": "gitlab_ci", "extends": null, "includes": includes, "triggers": ["push"], "jobs": jobs}
+
+pl_gitlab_input(pipelines) := pl_input(
+	[{"path": p.path, "content": "(model only)"} | some p in pipelines],
+	{"proposal": {"pipelines": pipelines}, "context": {"ci_runtime": "gitlab_ci"}},
+)
+
+pl_digest := concat("", ["python:3.12-slim@sha256:", concat("", [x | some _ in numbers.range(1, 64); x := "a"])])
+
+pl_gitlab_job(name, image, services, steps) := {"name": name, "kind": "job", "environment": null, "image": image, "services": services, "steps": steps}
+
+pl_gitlab_ci := pl_gitlab(
+	".gitlab/ci/ci-api.yml", [pl_gitlab_job("test", pl_digest, [], [
+		{"run": "pip install -r requirements.txt"},
+		{"run": "ruff check ."},
+		{"run": "pytest"},
+	])],
+	[],
+)
+
+test_gitlab_template_with_test_lint_and_digests_passes if {
+	denied := pl_denied(pl_gitlab_input([pl_gitlab_ci]))
+	not "practice.workflow_has_test_step" in denied
+	not "practice.workflow_has_lint_step" in denied
+	not "practice.workflow_pins_action_versions" in denied
+	not "proposal.allowed_paths" in denied
+	not "proposal.has_workflow" in denied
+}
+
+test_gitlab_template_without_a_test_step_is_denied if {
+	job := pl_gitlab_job("test", pl_digest, [], [{"run": "ruff check ."}])
+	inp := pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", [job], [])])
+	"practice.workflow_has_test_step" in pl_denied(inp)
+}
+
+test_gitlab_job_image_by_tag_is_denied if {
+	job := pl_gitlab_job("test", "python:3.12-slim", [], [{"run": "ruff check ."}, {"run": "pytest"}])
+	inp := pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", [job], [])])
+	some m in pl_messages(inp, "practice.workflow_pins_action_versions")
+	contains(m, "image `python:3.12-slim` should be pinned by digest")
+}
+
+test_gitlab_service_image_by_tag_is_denied if {
+	job := pl_gitlab_job("test", pl_digest, ["postgres:latest"], [{"run": "ruff check ."}, {"run": "pytest"}])
+	inp := pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", [job], [])])
+	some m in pl_messages(inp, "practice.workflow_pins_action_versions")
+	contains(m, "postgres:latest")
+}
+
+test_gitlab_includes_must_name_a_commit_sha if {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	ok := [
+		{"kind": "local", "location": ".gitlab/ci/steps/x.yml", "ref": null},
+		{"kind": "project", "location": "acme/platform", "ref": sha},
+		{"kind": "component", "location": concat("", ["gitlab.com/acme/c/lint@", sha]), "ref": sha},
+	]
+	clean := pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", pl_gitlab_ci.jobs, ok)])
+	count(pl_messages(clean, "practice.workflow_pins_action_versions")) == 0
+
+	bad := [
+		{"kind": "project", "location": "acme/platform", "ref": "main"},
+		{"kind": "project", "location": "acme/platform", "ref": null},
+		{"kind": "component", "location": "gitlab.com/acme/c/lint@1.2.0", "ref": "1.2.0"},
+		{"kind": "remote", "location": "https://example.invalid/ci.yml", "ref": null},
+		{"kind": "template", "location": "Auto-DevOps.gitlab-ci.yml", "ref": null},
+	]
+	dirty := pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", pl_gitlab_ci.jobs, bad)])
+	count(pl_messages(dirty, "practice.workflow_pins_action_versions")) == 4
+}
+
+test_gitlab_step_template_and_include_only_file_are_not_judged_on_their_own if {
+	bare := pl_gitlab_job("extra", pl_digest, [], [{"run": "echo hi"}])
+	inp := pl_gitlab_input([
+		pl_gitlab_ci,
+		pl_gitlab(".gitlab/ci/steps/extra.yml", [bare], []),
+		pl_gitlab(".gitlab/ci/all.yml", [], [{"kind": "local", "location": ".gitlab/ci/ci-api.yml", "ref": null}]),
+	])
+	not "practice.workflow_has_test_step" in pl_denied(inp)
+	not "practice.workflow_has_lint_step" in pl_denied(inp)
+}
+
+test_gitlab_deploy_only_pipeline_needs_no_test_step if {
+	deploy := object.union(pl_gitlab_job("deploy", pl_digest, [], [{"run": "./deploy.sh"}]), {"kind": "deployment", "environment": "prod"})
+	inp := pl_gitlab_input([pl_gitlab_ci, pl_gitlab(".gitlab/ci/deploy-api.yml", [deploy], [])])
+	not "practice.workflow_has_test_step" in pl_denied(inp)
+}
+
+test_gitlab_runtime_paths if {
+	count(pl_paths_denied([".gitlab/ci/ci-api.yml", ".gitlab/ci/steps/x.yaml", "gitops/a/b/c/Chart.yaml"], "gitlab_ci")) == 0
+
+	# Never the platform repo's own root pipeline, never another runtime's.
+	denied := pl_paths_denied([".gitlab-ci.yml", ".github/workflows/ci.yaml", "azure-pipelines.yml"], "gitlab_ci")
+	denied == {".gitlab-ci.yml", ".github/workflows/ci.yaml", "azure-pipelines.yml"}
+	pl_paths_denied([".gitlab/ci/ci-api.yml"], "github_actions") == {".gitlab/ci/ci-api.yml"}
+}
+
+test_has_workflow_on_gitlab if {
+	gl := pl_input([{"path": ".gitlab/ci/ci-api.yml", "content": ""}], {"context": {"ci_runtime": "gitlab_ci"}})
+	not "proposal.has_workflow" in pl_denied(gl)
+	root_only := pl_input([{"path": ".gitlab-ci.yml", "content": ""}], {"context": {"ci_runtime": "gitlab_ci"}})
+	"proposal.has_workflow" in pl_denied(root_only)
 }
 
 test_prod_environment_rule_covers_both_kinds if {
