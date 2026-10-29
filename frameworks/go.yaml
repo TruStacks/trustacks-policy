@@ -453,3 +453,28 @@ ci_templates:
                     # connection supplies the host) — never a name you construct.
                     repository: <image.repository.path>
                     tags: $(Build.SourceVersion)
+
+# #798: the runtimes this pack builds and tests on. The templates above are
+# written at the default entry. A go.mod `go` directive is a minimum, and newer
+# toolchains build older code, so the runner picks the oldest supported entry at
+# or above the directive (and says so in the PR body when the directive itself
+# is past or near end of life). An entry stays only while the endoflife.date
+# snapshot says it's supported.
+runtimes:
+  default: "1.27"
+  selection: minimum
+  entries:
+    - id: "1.27"
+      match: ["1.27"]
+      eol: null
+      pins:
+        build_image: "FROM golang:1.27 AS build"
+        setup_version: 'go-version: "1.27"'
+        ci_image: "golang:1.27@sha256:2920bb124f1a2e12a1d39f0cab756ae0068441ee1da7655dec7f5e374944095b"
+    - id: "1.26"
+      match: ["1.26"]
+      eol: null
+      pins:
+        build_image: "FROM golang:1.26 AS build"
+        setup_version: 'go-version: "1.26"'
+        ci_image: "golang:1.26@sha256:670bb5aa5349ae03b8516764718486f4f16399134bdc9acd0c46a23f043ab05c"

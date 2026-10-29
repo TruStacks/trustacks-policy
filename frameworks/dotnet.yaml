@@ -485,3 +485,30 @@ ci_templates:
                     # connection supplies the host) — never a name you construct.
                     repository: <image.repository.path>
                     tags: $(Build.SourceVersion)
+
+# #798: the runtimes this pack builds and tests on. The templates above are
+# written at the default entry; the runner swaps each `pins` string for the
+# entry matching the project's TargetFramework, because a .NET 10 SDK
+# container can't run `dotnet test` for a net8.0 project. An entry stays only
+# while the endoflife.date snapshot says it's supported (the runtime guard
+# test flags it for removal after its end of life).
+runtimes:
+  default: "10"
+  selection: exact
+  entries:
+    - id: "10"
+      match: ["net10.0"]
+      eol: 2028-11-14
+      pins:
+        build_image: "FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build"
+        runtime_image: "FROM mcr.microsoft.com/dotnet/aspnet:10.0\n"
+        setup_version: 'dotnet-version: "10.0.x"'
+        ci_image: "mcr.microsoft.com/dotnet/sdk:10.0@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b"
+    - id: "8"
+      match: ["net8.0"]
+      eol: 2026-11-10
+      pins:
+        build_image: "FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build"
+        runtime_image: "FROM mcr.microsoft.com/dotnet/aspnet:8.0\n"
+        setup_version: 'dotnet-version: "8.0.x"'
+        ci_image: "mcr.microsoft.com/dotnet/sdk:8.0@sha256:6ba9644da07bb5b560a402acec9ca38711a0762969f1b61da261df5c9f6f85da"
