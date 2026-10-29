@@ -121,3 +121,101 @@ def test_jvm_test_detection_distinguishes_running_from_skipping(
     workflow = f"jobs:\n  b:\n    steps:\n      - run: {command}\n"
     denied = "practice.workflow_has_test_step" in _deny_rule_ids(workflow)
     assert denied is not runs_tests, f"{command!r} was judged wrongly"
+
+
+# ---- Azure Pipelines (ADR-0071) -------------------------------------------
+#
+# The same promise for the packs' Azure Pipelines templates: what we tell the
+# agent to emit must pass the rules that judge it. Azure files are judged on the
+# neutral pipeline model the runner sends (`input.proposal.pipelines`); the
+# Rego fallback reads GitHub YAML only. The runner's normaliser isn't in this
+# repo, so `_azure_model` reads the shape the packs emit (stages, jobs, steps;
+# `script` is a run, `task` a uses, a job `container` an image) into the same
+# model. Practice rules that read steps, plus the per-runtime pinning rule.
+
+AZURE_PATH = "azure-pipelines/templates/ci-svc.yml"
+AZURE_PRACTICE_RULES = WORKFLOW_PRACTICE_RULES | {"practice.workflow_pins_action_versions"}
+
+
+def _azure_step(step: dict[str, object]) -> dict[str, object]:
+    out: dict[str, object] = {}
+    for key in ("script", "bash", "pwsh", "powershell"):
+        if isinstance(step.get(key), str):
+            out["run"] = step[key]
+    if isinstance(step.get("task"), str):
+        out["uses"] = step["task"]
+    return out
+
+
+def _azure_model(path: str, content: str) -> dict[str, object]:
+    doc = yaml.safe_load(content)
+    jobs = []
+    for stage in doc.get("stages", []):
+        for job in stage.get("jobs", []):
+            container = job.get("container")
+            jobs.append(
+                {
+                    "name": job.get("job") or job.get("deployment"),
+                    "kind": "deployment" if "deployment" in job else "job",
+                    "environment": job.get("environment"),
+                    "image": container if isinstance(container, str) else None,
+                    "steps": [_azure_step(s) for s in job.get("steps", [])],
+                }
+            )
+    return {
+        "path": path,
+        "runtime": "azure_pipelines",
+        "extends": None,
+        "triggers": [],
+        "jobs": jobs,
+    }
+
+
+def _azure_deny_rule_ids(content: str) -> set[str]:
+    payload = {
+        "proposal": {
+            "files": [{"path": AZURE_PATH, "content": content}],
+            "pipelines": [_azure_model(AZURE_PATH, content)],
+        },
+        "context": {
+            "platform_repo_url": "https://example.invalid/acme/platform",
+            "ci_runtime": "azure_pipelines",
+        },
+    }
+    proc = subprocess.run(
+        ["opa", "eval", "-d", str(CONSTITUTION), "-I", "data.proposal.deny", "--format", "json"],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    result = json.loads(proc.stdout)["result"]
+    if not result:
+        return set()
+    return {v["rule_id"] for v in result[0]["expressions"][0]["value"]}
+
+
+@pytest.mark.parametrize("pack_path", FRAMEWORK_PACKS, ids=lambda p: p.stem)
+def test_the_packs_azure_pipelines_template_passes_the_practice_rules(pack_path: Path) -> None:
+    pack = yaml.safe_load(pack_path.read_text(encoding="utf-8"))
+    template = (pack.get("ci_templates") or {}).get("azure_pipelines")
+    assert template, f"{pack_path.name} ships no Azure Pipelines template"
+    denied = _azure_deny_rule_ids(template) & AZURE_PRACTICE_RULES
+    assert not denied, (
+        f"{pack_path.name}'s Azure Pipelines template is denied by {sorted(denied)}. "
+        "The agent following this pack cannot produce a proposal that passes."
+    )
+
+
+def test_the_azure_rules_really_judge_the_template() -> None:
+    """Without its test command, and with a major-only task, the template is denied."""
+    pack = yaml.safe_load((REPO_ROOT / "frameworks" / "dotnet.yaml").read_text(encoding="utf-8"))
+    broken = (
+        pack["ci_templates"]["azure_pipelines"]
+        .replace("dotnet test", "dotnet pack")
+        .replace("Docker@2.282.0", "Docker@2")
+    )
+    denied = _azure_deny_rule_ids(broken)
+    assert "practice.workflow_has_test_step" in denied
+    assert "practice.workflow_pins_action_versions" in denied

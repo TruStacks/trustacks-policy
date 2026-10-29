@@ -119,3 +119,47 @@ ci_workflow_template: |
             # Use the exact `image.repository` from the Image reference
             # section of your instructions — never a name you construct.
             tags: <image.repository>:${{ github.sha }}
+
+# ADR-0071: the same jobs, for Azure Pipelines. An `extends` template in the
+# PLATFORM repo at azure-pipelines/templates/ci-<service>.yml; the service
+# repo's azure-pipelines.yml extends it (snippet in the PR body), so `checkout:
+# self` below fetches the SERVICE's source. Toolchains run in job containers
+# pinned by digest; the only tasks are allowlisted built-ins at a full version.
+# The image is pushed through a workload-identity registry service connection,
+# so no secret appears in YAML.
+ci_templates:
+  azure_pipelines: |
+      parameters:
+        - name: containerRegistry
+          displayName: Registry service connection (workload identity federation)
+          type: string
+
+      stages:
+        - stage: test
+          jobs:
+            - job: test
+              pool:
+                vmImage: ubuntu-24.04
+              container: golang:1.23@sha256:60deed95d3888cc5e4d9ff8a10c54e5edc008c6ae3fba6187be6fb592e19e8c0
+              steps:
+                - checkout: self
+                - script: go vet ./...
+                - script: go test -race ./...
+
+        - stage: build
+          dependsOn: test
+          jobs:
+            - job: build
+              pool:
+                vmImage: ubuntu-24.04
+              steps:
+                - checkout: self
+                - task: Docker@2.282.0
+                  inputs:
+                    command: buildAndPush
+                    containerRegistry: ${{ parameters.containerRegistry }}
+                    # The exact `image.repository` from the Image reference
+                    # section, without its registry host (the service
+                    # connection supplies the host) — never a name you construct.
+                    repository: <image.repository.path>
+                    tags: $(Build.SourceVersion)
