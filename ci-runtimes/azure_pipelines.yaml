@@ -94,6 +94,8 @@ setup_checklist:
   - Turn on "Limit job authorization scope" and "Protect access to repositories in YAML pipelines".
   - Disable Marketplace tasks for the organization (Organization settings → Pipelines → Task restrictions).
   - Protect the platform repo's default branch with required reviewers.
+  - If you take pull requests from forks, turn on "Build pull requests from forks" for the service repo's pipeline so the TruStacks policy check judges them; it needs no secret, so leave "Make secrets available to builds of forks" off.
+  - "When you're ready to block merges, set `enforcePolicy: true` in the caller and make the `policy_check` job a required check (build validation) on the service repo's default branch."
 
 # Read through the REST API and labelled observed, never asserted from YAML.
 cannot_verify:
