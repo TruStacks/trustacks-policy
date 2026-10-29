@@ -271,6 +271,37 @@ _ci_pipelines contains p if {
 	not _pipeline_is_fragment(p)
 }
 
+# A runtime whose only non-deploy pipelines are fragments (a GitLab template
+# that only `include:`s `.gitlab/ci/steps/jobs.yml`, an Azure caller beside
+# step templates and no root) would otherwise leave the step rules nothing to
+# judge, and a proposal with no test step would pass. Its fragments' jobs are
+# what the runtime runs, so they are judged together as one pipeline.
+_ci_pipelines contains p if {
+	some runtime in {q.runtime | some q in _pipelines}
+	not _runtime_has_ci_pipeline(runtime)
+	fragments := [q |
+		some q in _pipelines
+		q.runtime == runtime
+		_pipeline_is_fragment(q)
+		not _pipeline_is_deploy(q)
+	]
+	jobs := [job | some q in fragments; some job in q.jobs]
+	count(jobs) > 0
+	p := {
+		"path": concat(" + ", sort([q.path | some q in fragments])),
+		"runtime": runtime,
+		"extends": null,
+		"jobs": jobs,
+	}
+}
+
+_runtime_has_ci_pipeline(runtime) if {
+	some q in _pipelines
+	q.runtime == runtime
+	not _pipeline_is_deploy(q)
+	not _pipeline_is_fragment(q)
+}
+
 _model_job_deploys_to_ecs(job) if {
 	some step in job.steps
 	is_string(step.uses)

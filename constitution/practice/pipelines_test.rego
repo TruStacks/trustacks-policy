@@ -350,6 +350,53 @@ test_gitlab_step_template_and_include_only_file_are_not_judged_on_their_own if {
 	not "practice.workflow_has_lint_step" in pl_denied(inp)
 }
 
+# A template that only includes a step fragment is not a way around the step
+# rules: the fragment's jobs are what GitLab runs, so they are judged.
+test_gitlab_template_that_only_includes_steps_is_judged_through_them if {
+	bare := pl_gitlab_job("build", pl_digest, [], [{"run": "echo build"}])
+	inp := pl_gitlab_input([
+		pl_gitlab(".gitlab/ci/ci-api.yml", [], [{"kind": "local", "location": ".gitlab/ci/steps/jobs.yml", "ref": null}]),
+		pl_gitlab(".gitlab/ci/steps/jobs.yml", [bare], []),
+	])
+	denied := pl_denied(inp)
+	"practice.workflow_has_test_step" in denied
+	"practice.workflow_has_lint_step" in denied
+
+	good := pl_gitlab_input([
+		pl_gitlab(".gitlab/ci/ci-api.yml", [], [{"kind": "local", "location": ".gitlab/ci/steps/jobs.yml", "ref": null}]),
+		pl_gitlab(".gitlab/ci/steps/jobs.yml", pl_gitlab_ci.jobs, []),
+	])
+	not "practice.workflow_has_test_step" in pl_denied(good)
+	not "practice.workflow_has_lint_step" in pl_denied(good)
+}
+
+test_azure_step_templates_without_a_root_are_judged_through_them if {
+	caller := {"path": "azure-pipelines.yml", "runtime": "azure_pipelines", "extends": "templates/ci.yml@platform", "triggers": ["trigger"], "jobs": []}
+	bare := pl_job("default", [{"run": "echo fragment"}])
+	inp := pl_azure_input([caller, pl_azure("azure-pipelines/templates/steps/extra.yml", [bare])])
+	"practice.workflow_has_test_step" in pl_denied(inp)
+}
+
+test_gitlab_include_with_a_missing_field_is_still_denied if {
+	inp := pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", pl_gitlab_ci.jobs, [{"kind": "remote"}, {"location": "acme/platform"}])])
+	msgs := pl_messages(inp, "practice.workflow_pins_action_versions")
+	count(msgs) == 2
+	some m in msgs
+	contains(m, "`include: remote` (?)")
+}
+
+test_gitlab_image_and_service_written_as_mappings_are_judged if {
+	job := pl_gitlab_job("test", {"name": "python:3.12-slim", "entrypoint": [""]}, [{"name": "postgres:16"}], pl_gitlab_ci.jobs[0].steps)
+	msgs := pl_messages(pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", [job], [])]), "practice.workflow_pins_action_versions")
+	some a in msgs
+	contains(a, "image `python:3.12-slim`")
+	some b in msgs
+	contains(b, "image `postgres:16`")
+
+	pinned := pl_gitlab_job("test", {"name": pl_digest}, [{"name": pl_digest}], pl_gitlab_ci.jobs[0].steps)
+	count(pl_messages(pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", [pinned], [])]), "practice.workflow_pins_action_versions")) == 0
+}
+
 test_gitlab_deploy_only_pipeline_needs_no_test_step if {
 	deploy := object.union(pl_gitlab_job("deploy", pl_digest, [], [{"run": "./deploy.sh"}]), {"kind": "deployment", "environment": "prod"})
 	inp := pl_gitlab_input([pl_gitlab_ci, pl_gitlab(".gitlab/ci/deploy-api.yml", [deploy], [])])

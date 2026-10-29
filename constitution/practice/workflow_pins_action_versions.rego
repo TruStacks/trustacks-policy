@@ -137,7 +137,7 @@ deny contains msg if {
 		"rule_id": "practice.workflow_pins_action_versions",
 		"message": sprintf(
 			"pipeline %v: `include: %v` (%v) should name a full 40-character commit SHA; a branch, tag or URL can change under the same name",
-			[p.path, inc.kind, inc.location],
+			[p.path, object.get(inc, "kind", "?"), object.get(inc, "location", "?")],
 		),
 	}
 }
@@ -150,14 +150,16 @@ _gitlab_include_pinned(inc) if {
 	regex.match(`^[0-9a-f]{40}$`, inc.ref)
 }
 
+# An image is a string or, as GitLab also allows, a mapping with a `name`
+# (`_raw_image_name`, lib.rego): an unpinned image written as a mapping is
+# still judged.
 _gitlab_pipeline_images(p) := {image |
 	some job in p.jobs
-	image := job.image
-	is_string(image)
+	image := _raw_image_name(job.image)
 } | {image |
 	some job in p.jobs
-	some image in object.get(job, "services", [])
-	is_string(image)
+	some svc in object.get(job, "services", [])
+	image := _raw_image_name(svc)
 }
 
 # A ref "looks like" a near-SHA when it's hex-only AND the length is in
