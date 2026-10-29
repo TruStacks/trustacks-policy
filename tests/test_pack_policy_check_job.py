@@ -158,3 +158,81 @@ def test_a_file_it_cannot_check_fails_enforce(tmp_path: Path) -> None:
         env={"PATH": os.environ.get("PATH", ""), "GITLAB_CI": "true"},
     )
     assert on_gitlab.returncode == 3
+
+
+#: Where each CI runtime keeps its pipeline files, and look-alikes that aren't.
+CI_FILES = {
+    ".github/workflows/ci.yaml": True,
+    ".gitlab-ci.yml": True,
+    ".gitlab/ci/ci-api.yml": True,
+    "azure-pipelines.yml": True,
+    "azure-pipelines/templates/ci.yml": True,
+    ".gitlab/issue_templates/bug.yml": False,
+    "ci/gitlab-ci.yml": False,
+    ".github/dependabot.yml": False,
+}
+
+
+def _collector() -> str:
+    script = _gitlab(FRAMEWORK_PACKS[0])["policy_check"]["script"][0]
+    return script.split("<<'PY'\n")[1].split("\nPY\n", 1)[0]
+
+
+def test_every_runtimes_ci_files_are_collected(tmp_path: Path) -> None:
+    """Not only `.github/workflows/`: a GitLab or Azure repo's own pipeline too
+    (review on trustacks-mvp#807)."""
+    repo = tmp_path / "repo"
+    for rel in CI_FILES:
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text("jobs: {}\n")
+    inp, unchecked = tmp_path / "in.json", tmp_path / "un.json"
+    subprocess.run(
+        ["python3", "-", str(repo), str(inp), str(unchecked)],
+        input=_collector(),
+        text=True,
+        check=True,
+    )
+    collected = {f["path"] for f in json.loads(inp.read_text())["proposal"]["files"]}
+    assert collected == {rel for rel, ci in CI_FILES.items() if ci}
+
+
+@pytest.mark.skipif(shutil.which("opa") is None, reason="needs a real opa binary")
+def test_a_gitlab_repos_unpinned_image_is_reported_without_a_model(tmp_path: Path) -> None:
+    """The CI job sends no pipeline model; the bundle still judges GitLab pinning."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".gitlab-ci.yml").write_text("test:\n  image: python:3.12-slim\n  script: [pytest]\n")
+    inp, unchecked = tmp_path / "in.json", tmp_path / "un.json"
+    subprocess.run(
+        ["python3", "-", str(repo), str(inp), str(unchecked)],
+        input=_collector(),
+        text=True,
+        check=True,
+    )
+    proc = subprocess.run(
+        ["opa", "eval", "-d", str(CONSTITUTION), "-i", str(inp), "--format", "json",
+         "data.proposal.deny"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )  # fmt: skip
+    result = json.loads(proc.stdout)["result"]
+    messages = [
+        v["message"]
+        for v in result[0]["expressions"][0]["value"]
+        if v["rule_id"] == "practice.workflow_pins_action_versions"
+    ]
+    assert any("python:3.12-slim" in m for m in messages)
+
+
+@pytest.mark.parametrize("pack_path", FRAMEWORK_PACKS, ids=lambda p: p.stem)
+def test_the_gitlab_build_jobs(pack_path: Path) -> None:
+    """Merge requests build without a login or push; the push isn't interruptible."""
+    doc = _gitlab(pack_path)
+    assert doc["default"] == {"interruptible": True}
+    check = doc["build_check"]
+    assert check["rules"] == [{"if": '$CI_PIPELINE_SOURCE == "merge_request_event"'}]
+    assert not any("login" in s or "push" in s for s in check["script"])
+    assert doc["build"]["interruptible"] is False
+    assert doc["build"]["rules"] == [{"if": "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH"}]

@@ -55,18 +55,20 @@ image_pinning: digest
 # YAML file can't do them and TruStacks can't verify them from YAML.
 setup_checklist:
   - Add the `.gitlab-ci.yml` above to the service repo, with `ref` set to this PR's merge commit (the full 40-character SHA).
-  - Let the service project's job token read the platform repo (platform repo → Settings → CI/CD → Job token permissions → add the service project to the CI/CD job token allowlist), so the include and the checkout resolve. Leave "Allow Git push requests to the repository" off.
+  - "Give everyone who triggers the service repo's pipelines at least the Reporter role on the platform repo. `include: project` is resolved with the permissions of the user who triggers the pipeline, not the job token, so a pipeline started by someone who can't read the platform repo fails before it runs. (https://docs.gitlab.com/ci/yaml/#includeproject)"
+  - "Run the build jobs on a runner that allows Buildah's image, which runs as root: a privileged runner (GitLab.com's hosted runners are), or a self-managed runner that permits user namespaces or maps a non-root user (https://docs.gitlab.com/ci/docker/buildah_rootless_tutorial/)."
   - Protect the default branch of both repos (Settings → Repository → Protected branches) — no direct pushes, no force pushes.
   - Require merge request approvals on the platform repo, and prevent approval by the merge request's author.
   - "Create a protected environment for prod (Settings → CI/CD → Protected environments) with required approvals, so a deploy job naming `environment: prod` waits for a person."
   - Keep registry and deploy credentials in protected, masked variables (or OIDC `id_tokens` federation), never in YAML. They are exposed only on protected branches, so merge request pipelines never see them.
-  - Leave merge request pipelines from forks running in the fork (the default). If a maintainer runs one in the parent project, review the change first — it gets the parent's runners and variables.
+  - "Leave merge request pipelines from forks running in the fork (the default). If a maintainer runs one in the parent project, review the change first — it gets the parent's runners and variables. If the platform repo is private, a merge request from a fork by someone without access to it fails when the pipeline is created, because the include can't be read: give outside contributors Reporter on the platform repo, or run their pipelines in the parent project after review."
   - "When you're ready to block merges, set the `TRUSTACKS_ENFORCE_POLICY` project CI/CD variable to `true` (Settings → CI/CD → Variables, not protected, so merge request pipelines see it) and turn on \"Pipelines must succeed\" for the service repo's merge requests."
 
 # Read through the REST API and labelled observed, never asserted from YAML.
 cannot_verify:
   - Protected branches and merge request approval rules on either repo.
   - Protected environments and their approvers.
-  - The CI/CD job token allowlist and whether the job token may push.
+  - "Who can read the platform repo, which every pipeline's `include: project` needs."
+  - Whether the runner that picks up the build jobs allows Buildah's image to run as root.
   - Which variables are protected and masked, and whether fork pipelines may run in the parent project.
   - That the service repo's `.gitlab-ci.yml` includes this template at a commit SHA, and that "Pipelines must succeed" is on.

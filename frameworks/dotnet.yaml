@@ -160,8 +160,17 @@ ci_workflow_template: |
                     return True
                 if name == "containerfile":
                     return True
-                if len(parts) >= 3 and parts[0] == ".github" and parts[1] == "workflows":
-                    return name.endswith((".yml", ".yaml"))
+                if name.endswith((".yml", ".yaml")):
+                    # CI files, where each runtime keeps them: GitHub Actions, Azure
+                    # Pipelines, GitLab CI (the runner's `runtime_for_path`).
+                    if len(parts) >= 3 and parts[0] == ".github" and parts[1] == "workflows":
+                        return True
+                    if len(parts) >= 3 and parts[0] == ".gitlab" and parts[1] == "ci":
+                        return True
+                    if len(parts) >= 2 and parts[0] == "azure-pipelines":
+                        return True
+                    if len(parts) == 1 and name.rsplit(".", 1)[0] in ("azure-pipelines", ".gitlab-ci"):
+                        return True
                 return name == "task-definition.json" or name.endswith(".task-definition.json")
             files, unchecked = [], []
             for dirpath, dirs, names in os.walk(root):
@@ -375,8 +384,17 @@ ci_templates:
                             return True
                         if name == "containerfile":
                             return True
-                        if len(parts) >= 3 and parts[0] == ".github" and parts[1] == "workflows":
-                            return name.endswith((".yml", ".yaml"))
+                        if name.endswith((".yml", ".yaml")):
+                            # CI files, where each runtime keeps them: GitHub Actions, Azure
+                            # Pipelines, GitLab CI (the runner's `runtime_for_path`).
+                            if len(parts) >= 3 and parts[0] == ".github" and parts[1] == "workflows":
+                                return True
+                            if len(parts) >= 3 and parts[0] == ".gitlab" and parts[1] == "ci":
+                                return True
+                            if len(parts) >= 2 and parts[0] == "azure-pipelines":
+                                return True
+                            if len(parts) == 1 and name.rsplit(".", 1)[0] in ("azure-pipelines", ".gitlab-ci"):
+                                return True
                         return name == "task-definition.json" or name.endswith(".task-definition.json")
                     files, unchecked = [], []
                     for dirpath, dirs, names in os.walk(root):
@@ -497,8 +515,9 @@ ci_templates:
   # ADR-0071 decision 5: the same jobs, for GitLab CI. A file in the PLATFORM
   # repo at .gitlab/ci/ci-<service>.yml that the service repo's .gitlab-ci.yml
   # includes at a commit SHA (snippet in the PR body). Every job image is pinned
-  # by digest; the image is built with rootless Buildah and pushed only from the
-  # default branch.
+  # by digest. Buildah builds the image on merge requests without pushing, and
+  # pushes it only from the default branch. Buildah's image runs as root, so the
+  # build jobs need a runner that allows it (setup checklist).
   gitlab_ci: |
       # Included by the SERVICE repo's .gitlab-ci.yml (`include: project` at a
       # platform-repo commit SHA), so every job below runs on the SERVICE's source.
@@ -519,6 +538,11 @@ ci_templates:
           - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
             when: never
           - if: $CI_COMMIT_BRANCH
+
+      # A newer pipeline for the same branch makes this one redundant, so GitLab may
+      # cancel it ("Auto-cancel redundant pipelines"). The push job opts out.
+      default:
+        interruptible: true
 
       # ADR-0067 decision 3: the TruStacks policy check, the same signed constitution
       # the runner uses, on this repo's delivery files. It verifies the bundle's
@@ -581,8 +605,17 @@ ci_templates:
                     return True
                 if name == "containerfile":
                     return True
-                if len(parts) >= 3 and parts[0] == ".github" and parts[1] == "workflows":
-                    return name.endswith((".yml", ".yaml"))
+                if name.endswith((".yml", ".yaml")):
+                    # CI files, where each runtime keeps them: GitHub Actions, Azure
+                    # Pipelines, GitLab CI (the runner's `runtime_for_path`).
+                    if len(parts) >= 3 and parts[0] == ".github" and parts[1] == "workflows":
+                        return True
+                    if len(parts) >= 3 and parts[0] == ".gitlab" and parts[1] == "ci":
+                        return True
+                    if len(parts) >= 2 and parts[0] == "azure-pipelines":
+                        return True
+                    if len(parts) == 1 and name.rsplit(".", 1)[0] in ("azure-pipelines", ".gitlab-ci"):
+                        return True
                 return name == "task-definition.json" or name.endswith(".task-definition.json")
             files, unchecked = [], []
             for dirpath, dirs, names in os.walk(root):
@@ -670,16 +703,40 @@ ci_templates:
           - dotnet build --no-restore --configuration Release
           - dotnet test --no-build --configuration Release
 
+      # Both build jobs run Buildah's image, which runs as root: they need a
+      # privileged runner (GitLab.com's hosted runners are) or a self-managed one
+      # that permits user namespaces. See the setup checklist.
+      #
+      # Merge request pipelines build the image too, so a Dockerfile that doesn't
+      # build fails the merge request, not the default branch. No login, no push,
+      # no credential.
+      build_check:
+        stage: build
+        image: quay.io/buildah/stable:v1.43@sha256:aae93349168765352870b5969306db9a599de9cf5a1b417eefe97ce0427d943b
+        rules:
+          - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+        variables:
+          STORAGE_DRIVER: vfs
+          BUILDAH_FORMAT: docker
+          BUILDAH_ISOLATION: chroot
+        script:
+          - buildah build .
+
       build:
         stage: build
         image: quay.io/buildah/stable:v1.43@sha256:aae93349168765352870b5969306db9a599de9cf5a1b417eefe97ce0427d943b
+        # A push that has started runs to the end: a newer pipeline can't cancel it
+        # between the build and the push.
+        interruptible: false
         # Push only from the default branch: a merge request pipeline never pushes,
         # and never needs a registry credential.
         rules:
           - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
         variables:
           # The exact `image.repository` from the Image reference section of your
-          # instructions — never a name you construct.
+          # instructions — never a name you construct, and not `$CI_REGISTRY_IMAGE`
+          # unless it is the same path: the deploy manifests name this one. The job
+          # token below can push only to this project's own GitLab registry.
           IMAGE_REPOSITORY: <image.repository>
           STORAGE_DRIVER: vfs
           BUILDAH_FORMAT: docker

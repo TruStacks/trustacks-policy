@@ -18,6 +18,9 @@
 # immutable: the docs and the PR body say so. GitLab CI: no tasks; every job
 # and service image is pinned by digest, and every `include:` names a commit
 # SHA (or is `local`, this repo at this commit).
+#
+# `_pinned_pipelines` is the model plus, when no model was sent (the CI policy
+# check on a repository), the Azure and GitLab files read raw (lib.rego).
 
 package proposal
 
@@ -33,7 +36,7 @@ rule_metadata["practice.workflow_pins_action_versions"] := {
 }
 
 deny contains msg if {
-	some p in _pipelines
+	some p in _pinned_pipelines
 	p.runtime == "github_actions"
 	some unpinned in _unpinned_uses_refs(p)
 	parts := split(unpinned, "@")
@@ -49,7 +52,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
-	some p in _pipelines
+	some p in _pinned_pipelines
 	p.runtime == "github_actions"
 	some unpinned in _unpinned_uses_refs(p)
 	parts := split(unpinned, "@")
@@ -66,7 +69,7 @@ deny contains msg if {
 
 # Azure Pipelines: a task step names a full version.
 deny contains msg if {
-	some p in _pipelines
+	some p in _pinned_pipelines
 	p.runtime == "azure_pipelines"
 	some job in p.jobs
 	some step in job.steps
@@ -83,7 +86,7 @@ deny contains msg if {
 
 # Azure Pipelines: every container a job or step runs in is pinned by digest.
 deny contains msg if {
-	some p in _pipelines
+	some p in _pinned_pipelines
 	p.runtime == "azure_pipelines"
 	some image in _azure_pipeline_images(p)
 	not regex.match(`@sha256:[0-9a-f]{64}$`, image)
@@ -109,7 +112,7 @@ _azure_pipeline_images(p) := {image |
 
 # GitLab CI: every image a job or its services run in is pinned by digest.
 deny contains msg if {
-	some p in _pipelines
+	some p in _pinned_pipelines
 	p.runtime == "gitlab_ci"
 	some image in _gitlab_pipeline_images(p)
 	not regex.match(`@sha256:[0-9a-f]{64}$`, image)
@@ -126,7 +129,7 @@ deny contains msg if {
 # this commit; `project` and `component` must name a full commit SHA; `remote`
 # and `template` have no ref at all.
 deny contains msg if {
-	some p in _pipelines
+	some p in _pinned_pipelines
 	p.runtime == "gitlab_ci"
 	some inc in object.get(p, "includes", [])
 	not _gitlab_include_pinned(inc)

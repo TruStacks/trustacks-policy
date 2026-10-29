@@ -90,6 +90,134 @@ _github_environment_name(job) := trim_space(job.environment) if {
 	trim_space(job.environment.name) != ""
 } else := null
 
+# ---- Pinning without the model ------------------------------------------------
+#
+# The CI policy check (ADR-0067 decision 3) runs this bundle on a repository's
+# own files with no normaliser, so it sends no model, and the fallback above
+# reads GitHub Actions only. A repository's `azure-pipelines.yml` or
+# `.gitlab-ci.yml` would be collected and then judged by nothing. For the one
+# CI rule that judges repositories (pinning), the Azure Pipelines and GitLab CI
+# files are read here too, coarsely: every `image:` anywhere in the file, every
+# GitLab `services:` entry and `include:`, every Azure `task:`. That is
+# stricter than the runner's model (an unused hidden GitLab job counts), never
+# looser. Only the pinning rule reads these, so the step rules (test, lint)
+# never judge a pipeline they can't see the steps of.
+_pinned_pipelines contains p if some p in _pipelines
+
+_pinned_pipelines contains p if {
+	not _has_pipeline_model
+	some f in input.proposal.files
+	runtime := _raw_pipeline_runtime(f.path)
+	doc := yaml.unmarshal(f.content)
+	is_object(doc)
+	p := {
+		"path": f.path,
+		"runtime": runtime,
+		"extends": null,
+		"includes": _raw_gitlab_includes(runtime, doc),
+		"jobs": array.concat(
+			[_raw_job(image, []) | some image in _raw_images(doc)],
+			[_raw_job(null, [{"uses": task} | some task in _raw_azure_tasks(runtime, doc)])],
+		),
+	}
+}
+
+_raw_pipeline_runtime(path) := "gitlab_ci" if path in {".gitlab-ci.yml", ".gitlab-ci.yaml"}
+
+_raw_pipeline_runtime(path) := "gitlab_ci" if {
+	startswith(path, ".gitlab/ci/")
+	_is_yaml_path(path)
+}
+
+_raw_pipeline_runtime(path) := "azure_pipelines" if path in {"azure-pipelines.yml", "azure-pipelines.yaml"}
+
+_raw_pipeline_runtime(path) := "azure_pipelines" if {
+	startswith(path, "azure-pipelines/")
+	_is_yaml_path(path)
+}
+
+_is_yaml_path(path) if endswith(path, ".yml")
+
+_is_yaml_path(path) if endswith(path, ".yaml")
+
+_raw_job(image, steps) := {"name": "(raw)", "kind": "job", "environment": null, "image": image, "services": [], "steps": steps}
+
+_raw_images(doc) := {image |
+	walk(doc, [path, value])
+	count(path) > 0
+	path[count(path) - 1] == "image"
+	image := _raw_image_name(value)
+} | {image |
+	walk(doc, [path, value])
+	count(path) > 0
+	path[count(path) - 1] == "services"
+	is_array(value)
+	some entry in value
+	image := _raw_image_name(entry)
+}
+
+_raw_image_name(v) := trim_space(v) if {
+	is_string(v)
+	trim_space(v) != ""
+}
+
+_raw_image_name(v) := trim_space(v.name) if {
+	is_object(v)
+	is_string(v.name)
+	trim_space(v.name) != ""
+}
+
+_raw_azure_tasks(runtime, doc) := {task |
+	runtime == "azure_pipelines"
+	walk(doc, [path, task])
+	count(path) > 0
+	path[count(path) - 1] == "task"
+	is_string(task)
+}
+
+_raw_gitlab_includes(runtime, _) := [] if runtime != "gitlab_ci"
+
+_raw_gitlab_includes("gitlab_ci", doc) := [inc |
+	some entry in _raw_list(object.get(doc, "include", null))
+	some inc in _raw_gitlab_include(entry)
+]
+
+_raw_list(v) := v if is_array(v)
+
+else := [] if v == null
+
+else := [v]
+
+_raw_gitlab_include(entry) := {{"kind": "remote", "location": entry, "ref": null}} if {
+	is_string(entry)
+	regex.match(`^https?://`, entry)
+}
+
+_raw_gitlab_include(entry) := {{"kind": "local", "location": entry, "ref": null}} if {
+	is_string(entry)
+	not regex.match(`^https?://`, entry)
+}
+
+_raw_gitlab_include(entry) := {inc |
+	some kind in ["project", "component", "remote", "template", "local"]
+	location := entry[kind]
+	is_string(location)
+	inc := {"kind": kind, "location": location, "ref": _raw_include_ref(kind, location, entry)}
+} if {
+	is_object(entry)
+}
+
+# A component's ref is its `@<version>`; a project's is its `ref:`.
+_raw_include_ref(kind, location, entry) := ref if {
+	kind == "component"
+	parts := split(location, "@")
+	count(parts) > 1
+	ref := parts[count(parts) - 1]
+} else := entry.ref if {
+	kind != "component"
+	is_string(entry.ref)
+} else := null
+
 # A pipeline that only deploys: the GitHub workflow that runs the ECS deploy
 # action (ADR-0062), an Azure pipeline whose every job is a `deployment:` job,
 # or a GitLab pipeline whose every job names an `environment:`. It applies an

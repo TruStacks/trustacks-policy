@@ -377,3 +377,100 @@ test_prod_environment_rule_covers_both_kinds if {
 	meta.target_kinds == ["ecs-fargate", "kubernetes"]
 	contains(meta.description, "Azure Pipelines deployment job")
 }
+
+# ---- pinning without the model (the CI policy check on a repository) -------------
+#
+# ADR-0067's CI job sends a repository's own files and no model. Its GitLab and
+# Azure pipeline files are still judged for pinning, read raw.
+
+pl_raw_gitlab := `default:
+  image: python:3.12-slim
+include:
+  - project: acme/platform
+    ref: main
+    file: .gitlab/ci/ci-api.yml
+  - local: .gitlab/ci/steps/lint.yml
+test:
+  image:
+    name: golang:1.27
+  services:
+    - postgres:16
+    - name: redis:7
+  script: [go test ./...]
+`
+
+pl_raw_azure := `resources:
+  containers:
+    - container: trivy
+      image: aquasec/trivy:0.58.0
+jobs:
+  - job: build
+    steps:
+      - task: Docker@2
+      - script: make test
+`
+
+pl_raw_messages(path, content) := pl_messages(
+	pl_input([{"path": path, "content": content}], {}),
+	"practice.workflow_pins_action_versions",
+)
+
+test_raw_gitlab_ci_is_judged_for_pinning_when_no_model_is_sent if {
+	msgs := pl_raw_messages(".gitlab-ci.yml", pl_raw_gitlab)
+	some a in msgs
+	contains(a, "python:3.12-slim")
+	some b in msgs
+	contains(b, "golang:1.27")
+	some c in msgs
+	contains(c, "postgres:16")
+	some d in msgs
+	contains(d, "redis:7")
+	some e in msgs
+	contains(e, "include: project")
+	count(msgs) == 5
+}
+
+test_raw_gitlab_ci_pinned_by_digest_passes if {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	pinned := concat("\n", [
+		"include:",
+		concat("", ["  - project: acme/platform\n    ref: ", sha, "\n    file: x.yml"]),
+		"test:",
+		concat("", ["  image: ", pl_digest]),
+		"  script: [pytest]",
+		"",
+	])
+	count(pl_raw_messages(".gitlab/ci/ci-api.yml", pinned)) == 0
+}
+
+test_raw_azure_pipeline_is_judged_for_pinning_when_no_model_is_sent if {
+	msgs := pl_raw_messages("azure-pipelines.yml", pl_raw_azure)
+	some a in msgs
+	contains(a, "task `Docker@2`")
+	some b in msgs
+	contains(b, "aquasec/trivy:0.58.0")
+	count(msgs) == 2
+}
+
+# The raw read is for pinning only: the step rules don't judge a pipeline whose
+# steps they can't see.
+test_raw_pipelines_are_not_judged_by_the_step_rules if {
+	denied := pl_denied(pl_input([{"path": ".gitlab-ci.yml", "content": "test:\n  script: [echo]\n"}], {}))
+	not "practice.workflow_has_test_step" in denied
+	not "practice.workflow_has_lint_step" in denied
+}
+
+# A file outside the runtimes' locations is not a pipeline.
+test_raw_read_follows_the_runtime_paths if {
+	count(pl_raw_messages("ci/gitlab-ci.yml", pl_raw_gitlab)) == 0
+	count(pl_raw_messages(".gitlab/other.yml", pl_raw_gitlab)) == 0
+}
+
+# With a model, the model is judged and the raw files are not read again.
+test_raw_read_is_skipped_when_a_model_is_sent if {
+	inp := pl_input(
+		[{"path": ".gitlab-ci.yml", "content": pl_raw_gitlab}],
+		{"proposal": {"pipelines": [pl_gitlab_ci]}, "context": {"ci_runtime": "gitlab_ci"}},
+	)
+	count(pl_messages(inp, "practice.workflow_pins_action_versions")) == 0
+}
