@@ -39,6 +39,23 @@ files:
       references ../../base, sets namespace, and pins the image tag via
       `images:` — the per-environment difference, and the only place a tag
       appears
+  # Exposure, opt-in (ADR-0070 §3). Kustomize has no `if`, so "off by
+  # default" is a component no overlay references: nothing in it deploys until
+  # the customer adds it to an overlay and sets their host. The placeholder host
+  # can't resolve, so an overlay that enables it without setting one never
+  # serves a guessed or wildcard host — and pre-emit validation refuses it.
+  - path: components/ingress/kustomization.yaml
+    purpose: >-
+      `apiVersion: kustomize.config.k8s.io/v1alpha1`, `kind: Component`,
+      `resources: [ingress.yaml]`. Referenced by NO overlay you emit; the PR body
+      shows the customer how to enable it per overlay
+  - path: components/ingress/ingress.yaml
+    purpose: >-
+      a networking.k8s.io/v1 Ingress routing `/` (Prefix) to the Service, with
+      `host: change-me.invalid` (never a guessed host) and no ingressClassName.
+      On OpenShift, the annotation `route.openshift.io/termination: edge`: the
+      router turns it into a Route that terminates TLS and redirects HTTP to
+      HTTPS. `nginx.ingress.kubernetes.io/*` annotations do nothing there
 
 # What the ArgoCD Application points at.
 argocd:
