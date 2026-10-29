@@ -16,13 +16,13 @@ detection:
   # repo root sometimes still ship one.
   - file_present: [global.json]
 prompt_addendum: |
-  This is a .NET project (ASP.NET Core, .NET 8 or newer expected).
+  This is a .NET project (ASP.NET Core, .NET 10 (LTS) or newer expected).
   The DevOps Engineer must emit a multi-stage Dockerfile:
     Stage 1 (build): `mcr.microsoft.com/dotnet/sdk:<version>` runs
       `dotnet restore` (passing the *.csproj) followed by
       `dotnet publish -c Release -o /app/publish --no-restore`. The
       version comes from the customer's `<TargetFramework>` value
-      (e.g. `net8.0` → image tag `8.0`).
+      (e.g. `net10.0` → image tag `10.0`).
     Stage 2 (runtime): `mcr.microsoft.com/dotnet/aspnet:<version>`
       (smaller than the SDK image), copies `/app/publish` from the
       build stage. Set `ASPNETCORE_URLS=http://+:8080` so Kestrel
@@ -41,7 +41,7 @@ dockerfile_template: |
   # Reference Dockerfile for an ASP.NET Core service. Adapt the
   # framework version + assembly name to match the customer's
   # *.csproj.
-  FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+  FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
   WORKDIR /workspace
 
   # Restore as a separate layer so dependency changes don't bust the
@@ -53,7 +53,7 @@ dockerfile_template: |
   RUN dotnet publish -c Release -o /app/publish --no-restore
 
   # Runtime stage — aspnet image is roughly half the size of the SDK.
-  FROM mcr.microsoft.com/dotnet/aspnet:8.0
+  FROM mcr.microsoft.com/dotnet/aspnet:10.0
   WORKDIR /app
   COPY --from=build /app/publish .
 
@@ -242,7 +242,7 @@ ci_workflow_template: |
         - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
         - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
           with:
-            dotnet-version: "8.0.x"
+            dotnet-version: "10.0.x"
         - run: dotnet restore
         # `dotnet format --verify-no-changes` is the canonical .NET
         # lint/format step — ships with the SDK, no plugin install,
@@ -455,7 +455,7 @@ ci_templates:
             - job: test
               pool:
                 vmImage: ubuntu-24.04
-              container: mcr.microsoft.com/dotnet/sdk:8.0@sha256:6ba9644da07bb5b560a402acec9ca38711a0762969f1b61da261df5c9f6f85da
+              container: mcr.microsoft.com/dotnet/sdk:10.0@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b
               steps:
                 - checkout: self
                 - script: dotnet restore
@@ -485,3 +485,30 @@ ci_templates:
                     # connection supplies the host) — never a name you construct.
                     repository: <image.repository.path>
                     tags: $(Build.SourceVersion)
+
+# #798: the runtimes this pack builds and tests on. The templates above are
+# written at the default entry; the runner swaps each `pins` string for the
+# entry matching the project's TargetFramework, because a .NET 10 SDK
+# container can't run `dotnet test` for a net8.0 project. An entry stays only
+# while the endoflife.date snapshot says it's supported (the runtime guard
+# test flags it for removal after its end of life).
+runtimes:
+  default: "10"
+  selection: exact
+  entries:
+    - id: "10"
+      match: ["net10.0"]
+      eol: 2028-11-14
+      pins:
+        build_image: "FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build"
+        runtime_image: "FROM mcr.microsoft.com/dotnet/aspnet:10.0\n"
+        setup_version: 'dotnet-version: "10.0.x"'
+        ci_image: "mcr.microsoft.com/dotnet/sdk:10.0@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b"
+    - id: "8"
+      match: ["net8.0"]
+      eol: 2026-11-10
+      pins:
+        build_image: "FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build"
+        runtime_image: "FROM mcr.microsoft.com/dotnet/aspnet:8.0\n"
+        setup_version: 'dotnet-version: "8.0.x"'
+        ci_image: "mcr.microsoft.com/dotnet/sdk:8.0@sha256:6ba9644da07bb5b560a402acec9ca38711a0762969f1b61da261df5c9f6f85da"
