@@ -99,7 +99,7 @@ ci_workflow_template: |
             BUNDLE="${TRUSTACKS_POLICY_BUNDLE:-ghcr.io/trustacks/policy/constitution:1}"
             IDENTITY='^https://github\.com/TruStacks/trustacks-policy/\.github/workflows/publish\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
             ISSUER=https://token.actions.githubusercontent.com
-            SRC="${GITHUB_WORKSPACE:-${BUILD_SOURCESDIRECTORY:-$PWD}}"
+            SRC="${GITHUB_WORKSPACE:-${BUILD_SOURCESDIRECTORY:-${CI_PROJECT_DIR:-$PWD}}}"
             T="$(mktemp -d "${RUNNER_TEMP:-${AGENT_TEMPDIRECTORY:-/tmp}}/trustacks-policy.XXXXXX")"
 
             # Tools at the TruStacks runner's versions, each checked against its
@@ -134,8 +134,17 @@ ci_workflow_template: |
                     return True
                 if name == "containerfile":
                     return True
-                if len(parts) >= 3 and parts[0] == ".github" and parts[1] == "workflows":
-                    return name.endswith((".yml", ".yaml"))
+                if name.endswith((".yml", ".yaml")):
+                    # CI files, where each runtime keeps them: GitHub Actions, Azure
+                    # Pipelines, GitLab CI (the runner's `runtime_for_path`).
+                    if len(parts) >= 3 and parts[0] == ".github" and parts[1] == "workflows":
+                        return True
+                    if len(parts) >= 3 and parts[0] == ".gitlab" and parts[1] == "ci":
+                        return True
+                    if len(parts) >= 2 and parts[0] == "azure-pipelines":
+                        return True
+                    if len(parts) == 1 and name.rsplit(".", 1)[0] in ("azure-pipelines", ".gitlab-ci"):
+                        return True
                 return name == "task-definition.json" or name.endswith(".task-definition.json")
             files, unchecked = [], []
             for dirpath, dirs, names in os.walk(root):
@@ -179,6 +188,7 @@ ci_workflow_template: |
             level = "error" if enforce else "warning"
             gha = os.environ.get("GITHUB_ACTIONS") == "true"
             azure = os.environ.get("TF_BUILD", "").lower() == "true"
+            gitlab = os.environ.get("GITLAB_CI") == "true"
             def report(title, message, path=None):
                 if gha:
                     loc = f" file={path}," if path else " "
@@ -208,6 +218,9 @@ ci_workflow_template: |
                 print("Report-only: set enforce to block.")
                 if azure:
                     print("##vso[task.complete result=SucceededWithIssues;]")
+                if gitlab:
+                    # `allow_failure: exit_codes: [3]` shows the job as a warning.
+                    sys.exit(3)
             PY
 
     test:
@@ -303,7 +316,7 @@ ci_templates:
                     BUNDLE="${TRUSTACKS_POLICY_BUNDLE:-ghcr.io/trustacks/policy/constitution:1}"
                     IDENTITY='^https://github\.com/TruStacks/trustacks-policy/\.github/workflows/publish\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
                     ISSUER=https://token.actions.githubusercontent.com
-                    SRC="${GITHUB_WORKSPACE:-${BUILD_SOURCESDIRECTORY:-$PWD}}"
+                    SRC="${GITHUB_WORKSPACE:-${BUILD_SOURCESDIRECTORY:-${CI_PROJECT_DIR:-$PWD}}}"
                     T="$(mktemp -d "${RUNNER_TEMP:-${AGENT_TEMPDIRECTORY:-/tmp}}/trustacks-policy.XXXXXX")"
 
                     # Tools at the TruStacks runner's versions, each checked against its
@@ -338,8 +351,17 @@ ci_templates:
                             return True
                         if name == "containerfile":
                             return True
-                        if len(parts) >= 3 and parts[0] == ".github" and parts[1] == "workflows":
-                            return name.endswith((".yml", ".yaml"))
+                        if name.endswith((".yml", ".yaml")):
+                            # CI files, where each runtime keeps them: GitHub Actions, Azure
+                            # Pipelines, GitLab CI (the runner's `runtime_for_path`).
+                            if len(parts) >= 3 and parts[0] == ".github" and parts[1] == "workflows":
+                                return True
+                            if len(parts) >= 3 and parts[0] == ".gitlab" and parts[1] == "ci":
+                                return True
+                            if len(parts) >= 2 and parts[0] == "azure-pipelines":
+                                return True
+                            if len(parts) == 1 and name.rsplit(".", 1)[0] in ("azure-pipelines", ".gitlab-ci"):
+                                return True
                         return name == "task-definition.json" or name.endswith(".task-definition.json")
                     files, unchecked = [], []
                     for dirpath, dirs, names in os.walk(root):
@@ -383,6 +405,7 @@ ci_templates:
                     level = "error" if enforce else "warning"
                     gha = os.environ.get("GITHUB_ACTIONS") == "true"
                     azure = os.environ.get("TF_BUILD", "").lower() == "true"
+                    gitlab = os.environ.get("GITLAB_CI") == "true"
                     def report(title, message, path=None):
                         if gha:
                             loc = f" file={path}," if path else " "
@@ -412,6 +435,9 @@ ci_templates:
                         print("Report-only: set enforce to block.")
                         if azure:
                             print("##vso[task.complete result=SucceededWithIssues;]")
+                        if gitlab:
+                            # `allow_failure: exit_codes: [3]` shows the job as a warning.
+                            sys.exit(3)
                     PY
                   displayName: TruStacks policy check
                   target:
@@ -451,3 +477,243 @@ ci_templates:
                     # connection supplies the host) — never a name you construct.
                     repository: <image.repository.path>
                     tags: $(Build.SourceVersion)
+
+  # ADR-0071 decision 5: the same jobs, for GitLab CI. A file in the PLATFORM
+  # repo at .gitlab/ci/ci-<service>.yml that the service repo's .gitlab-ci.yml
+  # includes at a commit SHA (snippet in the PR body). Every job image is pinned
+  # by digest. Buildah builds the image on merge requests without pushing, and
+  # pushes it only from the default branch. Buildah's image runs as root, so the
+  # build jobs need a runner that allows it (setup checklist).
+  gitlab_ci: |
+      # Included by the SERVICE repo's .gitlab-ci.yml (`include: project` at a
+      # platform-repo commit SHA), so every job below runs on the SERVICE's source.
+      stages:
+        - test
+        - build
+
+      variables:
+        # ADR-0067: the policy check is report-only until this is "true". Set it as a
+        # project CI/CD variable rather than here, so a merge request can't turn it off.
+        TRUSTACKS_ENFORCE_POLICY: "false"
+
+      # Merge request pipelines, and branch pipelines when no merge request is open:
+      # never both for one push. `rules`, not the deprecated `only`/`except`.
+      workflow:
+        rules:
+          - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+          - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+            when: never
+          - if: $CI_COMMIT_BRANCH
+
+      # A newer pipeline for the same branch makes this one redundant, so GitLab may
+      # cancel it ("Auto-cancel redundant pipelines"). The push job opts out.
+      default:
+        interruptible: true
+
+      # ADR-0067 decision 3: the TruStacks policy check, the same signed constitution
+      # the runner uses, on this repo's delivery files. It verifies the bundle's
+      # signature first, uses no variable but the enforce switch (none protected), and
+      # only fetches the repo, so it is safe on merge requests from forks. Report-only
+      # findings exit 3, which `allow_failure` shows as a warning; under enforce they
+      # exit 1 and fail the pipeline.
+      policy_check:
+        stage: test
+        image: python:3.12-bookworm@sha256:a5bab0ff300f91231c2e68bf73a8a8d60762ac39ce1c50eaf6803e4c38a9062b
+        variables:
+          GIT_STRATEGY: fetch
+          GIT_DEPTH: "1"
+          TRUSTACKS_ENFORCE: $TRUSTACKS_ENFORCE_POLICY
+        allow_failure:
+          exit_codes: [3]
+        script:
+          - |
+            set -euo pipefail
+            # TruStacks policy check (ADR-0067 decision 3). Judges this repo's delivery
+            # files (Dockerfiles, CI workflows, ECS task definitions) with the same signed
+            # constitution bundle the TruStacks runner uses. Report-only unless enforce is
+            # on. It needs no secret and only reads the repo, so it is safe on fork PRs.
+            # It fails closed: a delivery file it could not check counts against enforce.
+            BUNDLE="${TRUSTACKS_POLICY_BUNDLE:-ghcr.io/trustacks/policy/constitution:1}"
+            IDENTITY='^https://github\.com/TruStacks/trustacks-policy/\.github/workflows/publish\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+            ISSUER=https://token.actions.githubusercontent.com
+            SRC="${GITHUB_WORKSPACE:-${BUILD_SOURCESDIRECTORY:-${CI_PROJECT_DIR:-$PWD}}}"
+            T="$(mktemp -d "${RUNNER_TEMP:-${AGENT_TEMPDIRECTORY:-/tmp}}/trustacks-policy.XXXXXX")"
+
+            # Tools at the TruStacks runner's versions, each checked against its
+            # release checksum before it runs.
+            fetch() { curl -fsSL --retry 3 -o "$T/$1" "$2"; echo "$3  $T/$1" | sha256sum -c --quiet -; }
+            fetch opa https://github.com/open-policy-agent/opa/releases/download/v1.15.2/opa_linux_amd64_static a9d9481e463e7af8cb1a2cd7c3deb764f0327b3281c54e632546c2f425fc0824
+            fetch oras.tgz https://github.com/oras-project/oras/releases/download/v1.3.2/oras_1.3.2_linux_amd64.tar.gz 9229ccc6d17bb282039ad4a69abb16dcb887a5bce567c075d731d9b3c7ad8eaf
+            fetch cosign https://github.com/sigstore/cosign/releases/download/v3.0.6/cosign-linux-amd64 c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
+            tar -xzf "$T/oras.tgz" -C "$T" oras
+            chmod +x "$T/opa" "$T/oras" "$T/cosign"
+
+            # Resolve the tag once, then verify and pull that digest: a tag moved in
+            # between can't slip unverified bytes in.
+            case "$BUNDLE" in
+              *@sha256:*) PINNED="$BUNDLE" ;;
+              *) PINNED="${BUNDLE%:*}@$("$T/oras" resolve "$BUNDLE")" ;;
+            esac
+            "$T/cosign" verify --certificate-identity-regexp "$IDENTITY" \
+              --certificate-oidc-issuer "$ISSUER" "$PINNED" > /dev/null
+            "$T/oras" pull -o "$T/bundle" "$PINNED" > /dev/null
+            echo "Policy bundle verified: $PINNED"
+
+            # Every delivery file is either checked or listed as unchecked, never dropped.
+            python3 - "$SRC" "$T/input.json" "$T/unchecked.json" <<'PY'
+            import json, os, sys
+            root, input_path, unchecked_path = sys.argv[1:4]
+            skip = {".git", "node_modules", "vendor", "dist", "build", "target", ".venv"}
+            def delivery(rel):
+                parts = rel.lower().split("/")
+                name = parts[-1]
+                if name == "dockerfile" or name.endswith(".dockerfile") or name.startswith("dockerfile."):
+                    return True
+                if name == "containerfile":
+                    return True
+                if name.endswith((".yml", ".yaml")):
+                    # CI files, where each runtime keeps them: GitHub Actions, Azure
+                    # Pipelines, GitLab CI (the runner's `runtime_for_path`).
+                    if len(parts) >= 3 and parts[0] == ".github" and parts[1] == "workflows":
+                        return True
+                    if len(parts) >= 3 and parts[0] == ".gitlab" and parts[1] == "ci":
+                        return True
+                    if len(parts) >= 2 and parts[0] == "azure-pipelines":
+                        return True
+                    if len(parts) == 1 and name.rsplit(".", 1)[0] in ("azure-pipelines", ".gitlab-ci"):
+                        return True
+                return name == "task-definition.json" or name.endswith(".task-definition.json")
+            files, unchecked = [], []
+            for dirpath, dirs, names in os.walk(root):
+                dirs[:] = sorted(d for d in dirs if d not in skip)
+                for n in sorted(names):
+                    path = os.path.join(dirpath, n)
+                    rel = os.path.relpath(path, root).replace(os.sep, "/")
+                    if not delivery(rel):
+                        continue
+                    if os.path.islink(path):
+                        unchecked.append({"path": rel, "reason": "it is a symlink"})
+                    elif len(files) >= 200:
+                        unchecked.append({"path": rel, "reason": "over the 200-file limit"})
+                    elif os.path.getsize(path) > 256 * 1024:
+                        unchecked.append({"path": rel, "reason": "larger than 256 KB"})
+                    else:
+                        try:
+                            with open(path, encoding="utf-8") as fh:
+                                files.append({"path": rel, "content": fh.read()})
+                        except UnicodeDecodeError:
+                            unchecked.append({"path": rel, "reason": "not UTF-8 text"})
+                        except OSError as exc:
+                            unchecked.append({"path": rel, "reason": f"unreadable ({exc.strerror})"})
+            with open(input_path, "w") as fh:
+                json.dump({"proposal": {"files": files}, "context": {"subject": "repo", "platform_repo_url": ""}}, fh)
+            with open(unchecked_path, "w") as fh:
+                json.dump({"checked": len(files), "unchecked": unchecked}, fh)
+            PY
+
+            # Only rules that declare they can judge a repo's own files (subjects: repo).
+            "$T/opa" eval --bundle "$T/bundle/bundle.tar.gz" --input "$T/input.json" --format raw \
+              '[v | some v in data.proposal.deny; "repo" in object.get(object.get(data.proposal.rule_metadata, v.rule_id, {}), "subjects", ["proposal"])]' \
+              > "$T/violations.json"
+
+            python3 - "$T/violations.json" "$T/unchecked.json" "${TRUSTACKS_ENFORCE:-false}" <<'PY'
+            import json, os, sys
+            violations = json.load(open(sys.argv[1]))
+            coverage = json.load(open(sys.argv[2]))
+            unchecked = coverage["unchecked"]
+            enforce = sys.argv[3].lower() == "true"
+            level = "error" if enforce else "warning"
+            gha = os.environ.get("GITHUB_ACTIONS") == "true"
+            azure = os.environ.get("TF_BUILD", "").lower() == "true"
+            gitlab = os.environ.get("GITLAB_CI") == "true"
+            def report(title, message, path=None):
+                if gha:
+                    loc = f" file={path}," if path else " "
+                    print(f"::{level}{loc}title={title}::{message}")
+                elif azure:
+                    print(f"##vso[task.logissue type={level}]{title}: {message}")
+                else:
+                    print(f"{level}: {title}: {message}")
+            for v in violations:
+                report(v["rule_id"], v["message"])
+            for u in unchecked:
+                report("could not check", f"{u['path']}: {u['reason']}", u["path"])
+            line = f"Checked {coverage['checked']} delivery file(s), could not check {len(unchecked)}; {len(violations)} violation(s)."
+            print(line)
+            summary = os.environ.get("GITHUB_STEP_SUMMARY")
+            if summary:
+                with open(summary, "a") as fh:
+                    fh.write(f"### TruStacks policy check\n\n{line}\n\n")
+                    for v in violations:
+                        fh.write(f"- `{v['rule_id']}`: {v['message']}\n")
+                    for u in unchecked:
+                        fh.write(f"- could not check `{u['path']}`: {u['reason']}\n")
+            findings = bool(violations or unchecked)
+            if findings and enforce:
+                sys.exit(1)
+            if findings:
+                print("Report-only: set enforce to block.")
+                if azure:
+                    print("##vso[task.complete result=SucceededWithIssues;]")
+                if gitlab:
+                    # `allow_failure: exit_codes: [3]` shows the job as a warning.
+                    sys.exit(3)
+            PY
+
+      test:
+        stage: test
+        image: python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
+        script:
+          - pip install --no-cache-dir -r requirements.txt
+          - ruff check .
+          - pytest -q --junitxml=test-results.xml
+        artifacts:
+          when: always
+          reports:
+            junit: test-results.xml
+
+      # Both build jobs run Buildah's image, which runs as root: they need a
+      # privileged runner (GitLab.com's hosted runners are) or a self-managed one
+      # that permits user namespaces. See the setup checklist.
+      #
+      # Merge request pipelines build the image too, so a Dockerfile that doesn't
+      # build fails the merge request, not the default branch. No login, no push,
+      # no credential.
+      build_check:
+        stage: build
+        image: quay.io/buildah/stable:v1.43@sha256:aae93349168765352870b5969306db9a599de9cf5a1b417eefe97ce0427d943b
+        rules:
+          - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+        variables:
+          STORAGE_DRIVER: vfs
+          BUILDAH_FORMAT: docker
+          BUILDAH_ISOLATION: chroot
+        script:
+          - buildah build .
+
+      build:
+        stage: build
+        image: quay.io/buildah/stable:v1.43@sha256:aae93349168765352870b5969306db9a599de9cf5a1b417eefe97ce0427d943b
+        # A push that has started runs to the end: a newer pipeline can't cancel it
+        # between the build and the push.
+        interruptible: false
+        # Push only from the default branch: a merge request pipeline never pushes,
+        # and never needs a registry credential.
+        rules:
+          - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+        variables:
+          # The exact `image.repository` from the Image reference section of your
+          # instructions — never a name you construct, and not `$CI_REGISTRY_IMAGE`
+          # unless it is the same path: the deploy manifests name this one. The job
+          # token below can push only to this project's own GitLab registry.
+          IMAGE_REPOSITORY: <image.repository>
+          STORAGE_DRIVER: vfs
+          BUILDAH_FORMAT: docker
+          BUILDAH_ISOLATION: chroot
+        script:
+          # GitLab's container registry takes the job's own short-lived token. For
+          # another registry, log in with its OIDC federation (`id_tokens`) instead;
+          # never a stored password.
+          - echo "$CI_REGISTRY_PASSWORD" | buildah login --username "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+          - buildah build --tag "$IMAGE_REPOSITORY:$CI_COMMIT_SHA" .
+          - buildah push "$IMAGE_REPOSITORY:$CI_COMMIT_SHA"

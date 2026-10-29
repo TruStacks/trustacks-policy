@@ -1,0 +1,74 @@
+# GitLab CI runtime pack (ADR-0071 §3–§4, decision 5).
+#
+# What the DevOps Engineer writes when the customer's Stack file declares
+# `ci_cd_platform: gitlab_ci`. Framework packs keep the application idiom
+# (build, test and lint commands) and carry a `gitlab_ci` template under
+# `ci_templates`; this pack carries what is the same for every framework on
+# GitLab: where the files go, how the service repo consumes them, and what the
+# customer has to set up outside YAML.
+#
+# GitHub Actions is the default runtime and has no pack: its shape lives in the
+# framework packs' `ci_workflow_template`.
+ci_runtime: gitlab_ci
+display_name: GitLab CI
+
+# The shared pipeline is a file in the PLATFORM repo that the service repo's
+# `.gitlab-ci.yml` includes with `include: project`. TruStacks never writes the
+# platform repo's own root `.gitlab-ci.yml`: the gate allows `.gitlab/ci/` only.
+# https://docs.gitlab.com/ci/yaml/#includeproject
+paths:
+  # One file per service; a platform repo holds every service in the
+  # Application, so a shared `ci.yml` would collide.
+  template: .gitlab/ci/ci-{service}.yml
+  # Included only from the template (`include: local`). The step rules judge
+  # the template, not these fragments.
+  step_templates: .gitlab/ci/steps/
+  # Non-GitOps delivery only (ADR-0069 push / ADR-0062): a job naming
+  # `environment:`.
+  deploy: .gitlab/ci/deploy-{service}.yml
+
+# The pipeline the customer adds to the SERVICE repo, once. TruStacks never
+# writes there; the PR body shows this snippet. `ref` pins the include to a
+# platform-repo commit: GitLab accepts a branch, tag or commit SHA, and a full
+# 40-character SHA is the only one of those that can't move. Replace it with
+# this PR's merge commit once merged.
+# CI/CD components (`include: component`) are not used: a component is
+# addressed by `@<version>`, and only a commit SHA there is immutable; the
+# include below is the same file at the same guarantee, with no catalog.
+# https://docs.gitlab.com/ci/yaml/#includeproject
+# https://docs.gitlab.com/ci/components/#component-versions
+caller:
+  path: .gitlab-ci.yml
+  template: |
+    # .gitlab-ci.yml in the SERVICE repo.
+    include:
+      - project: <group>/<platform-repo>
+        ref: <platform-commit-sha>   # the full 40-character commit SHA
+        file: .gitlab/ci/ci-<service>.yml
+
+# No built-in tasks on GitLab: every step is a script line in a job whose
+# image is pinned by digest (`image@sha256:`), never a tag and never `latest`.
+tasks: []
+image_pinning: digest
+
+# What the customer sets up outside YAML. The PR body lists these, because a
+# YAML file can't do them and TruStacks can't verify them from YAML.
+setup_checklist:
+  - Add the `.gitlab-ci.yml` above to the service repo, with `ref` set to this PR's merge commit (the full 40-character SHA).
+  - "Give everyone who triggers the service repo's pipelines at least the Reporter role on the platform repo. `include: project` is resolved with the permissions of the user who triggers the pipeline, not the job token, so a pipeline started by someone who can't read the platform repo fails before it runs. (https://docs.gitlab.com/ci/yaml/#includeproject)"
+  - "Run the build jobs on a runner that allows Buildah's image, which runs as root: a privileged runner (GitLab.com's hosted runners are), or a self-managed runner that permits user namespaces or maps a non-root user (https://docs.gitlab.com/ci/docker/buildah_rootless_tutorial/)."
+  - Protect the default branch of both repos (Settings → Repository → Protected branches) — no direct pushes, no force pushes.
+  - Require merge request approvals on the platform repo, and prevent approval by the merge request's author.
+  - "Create a protected environment for prod (Settings → CI/CD → Protected environments) with required approvals, so a deploy job naming `environment: prod` waits for a person."
+  - Keep registry and deploy credentials in protected, masked variables (or OIDC `id_tokens` federation), never in YAML. They are exposed only on protected branches, so merge request pipelines never see them.
+  - "Leave merge request pipelines from forks running in the fork (the default). If a maintainer runs one in the parent project, review the change first — it gets the parent's runners and variables. If the platform repo is private, a merge request from a fork by someone without access to it fails when the pipeline is created, because the include can't be read: give outside contributors Reporter on the platform repo, or run their pipelines in the parent project after review."
+  - "When you're ready to block merges, set the `TRUSTACKS_ENFORCE_POLICY` project CI/CD variable to `true` (Settings → CI/CD → Variables, not protected, so merge request pipelines see it) and turn on \"Pipelines must succeed\" for the service repo's merge requests."
+
+# Read through the REST API and labelled observed, never asserted from YAML.
+cannot_verify:
+  - Protected branches and merge request approval rules on either repo.
+  - Protected environments and their approvers.
+  - "Who can read the platform repo, which every pipeline's `include: project` needs."
+  - Whether the runner that picks up the build jobs allows Buildah's image to run as root.
+  - Which variables are protected and masked, and whether fork pipelines may run in the parent project.
+  - That the service repo's `.gitlab-ci.yml` includes this template at a commit SHA, and that "Pipelines must succeed" is on.

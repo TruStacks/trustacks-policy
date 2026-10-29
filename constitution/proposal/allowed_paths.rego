@@ -4,15 +4,16 @@
 #
 # ADR-0071: the pipeline location follows the proposal's CI runtime
 # (`ci_runtime`): `.github/workflows/` for GitHub Actions, `azure-pipelines.yml`
-# and `azure-pipelines/` for Azure Pipelines. A proposal for one runtime may not
-# write the other's pipeline files.
+# and `azure-pipelines/` for Azure Pipelines, `.gitlab/ci/` for GitLab CI (never
+# the platform repo's own root `.gitlab-ci.yml`). A proposal for one runtime may
+# not write another's pipeline files.
 
 package proposal
 
 import rego.v1
 
 rule_metadata["proposal.allowed_paths"] := {
-	"description": "Every artifact path lives under gitops/, argo-apps/, or the CI runtime's pipeline location (.github/workflows/, or azure-pipelines.yml / azure-pipelines/).",
+	"description": "Every artifact path lives under gitops/, argo-apps/, or the CI runtime's pipeline location (.github/workflows/, azure-pipelines.yml / azure-pipelines/, or .gitlab/ci/).",
 	"required_tooling_categories": [],
 	"practice_dimensions": [],
 	"tier_scope": ["any"],
@@ -21,6 +22,7 @@ rule_metadata["proposal.allowed_paths"] := {
 _runtime_pipeline_prefixes := {
 	"github_actions": [".github/workflows/"],
 	"azure_pipelines": ["azure-pipelines/"],
+	"gitlab_ci": [".gitlab/ci/"],
 }
 
 _runtime_pipeline_files := {"azure_pipelines": ["azure-pipelines.yml", "azure-pipelines.yaml"]}

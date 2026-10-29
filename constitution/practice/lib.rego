@@ -32,8 +32,9 @@ _is_dockerfile(path) if path == "Dockerfile"
 #
 # The CI pipelines in this proposal, in the neutral model the runner builds
 # (`input.proposal.pipelines`): one entry per pipeline file with its path, its
-# runtime (`github_actions`, `azure_pipelines`), and its jobs and steps. The
-# universal practice rules read this, so they judge any runtime the same way.
+# runtime (`github_actions`, `azure_pipelines`, `gitlab_ci`), and its jobs and
+# steps. The universal practice rules read this, so they judge any runtime the
+# same way.
 #
 # When the runner sent no model (a runner older than ADR-0071), the model is
 # built here from the raw GitHub Actions YAML, the only runtime such a runner
@@ -89,9 +90,138 @@ _github_environment_name(job) := trim_space(job.environment) if {
 	trim_space(job.environment.name) != ""
 } else := null
 
+# ---- Pinning without the model ------------------------------------------------
+#
+# The CI policy check (ADR-0067 decision 3) runs this bundle on a repository's
+# own files with no normaliser, so it sends no model, and the fallback above
+# reads GitHub Actions only. A repository's `azure-pipelines.yml` or
+# `.gitlab-ci.yml` would be collected and then judged by nothing. For the one
+# CI rule that judges repositories (pinning), the Azure Pipelines and GitLab CI
+# files are read here too, coarsely: every `image:` anywhere in the file, every
+# GitLab `services:` entry and `include:`, every Azure `task:`. That is
+# stricter than the runner's model (an unused hidden GitLab job counts), never
+# looser. Only the pinning rule reads these, so the step rules (test, lint)
+# never judge a pipeline they can't see the steps of.
+_pinned_pipelines contains p if some p in _pipelines
+
+_pinned_pipelines contains p if {
+	not _has_pipeline_model
+	some f in input.proposal.files
+	runtime := _raw_pipeline_runtime(f.path)
+	doc := yaml.unmarshal(f.content)
+	is_object(doc)
+	p := {
+		"path": f.path,
+		"runtime": runtime,
+		"extends": null,
+		"includes": _raw_gitlab_includes(runtime, doc),
+		"jobs": array.concat(
+			[_raw_job(image, []) | some image in _raw_images(doc)],
+			[_raw_job(null, [{"uses": task} | some task in _raw_azure_tasks(runtime, doc)])],
+		),
+	}
+}
+
+_raw_pipeline_runtime(path) := "gitlab_ci" if path in {".gitlab-ci.yml", ".gitlab-ci.yaml"}
+
+_raw_pipeline_runtime(path) := "gitlab_ci" if {
+	startswith(path, ".gitlab/ci/")
+	_is_yaml_path(path)
+}
+
+_raw_pipeline_runtime(path) := "azure_pipelines" if path in {"azure-pipelines.yml", "azure-pipelines.yaml"}
+
+_raw_pipeline_runtime(path) := "azure_pipelines" if {
+	startswith(path, "azure-pipelines/")
+	_is_yaml_path(path)
+}
+
+_is_yaml_path(path) if endswith(path, ".yml")
+
+_is_yaml_path(path) if endswith(path, ".yaml")
+
+_raw_job(image, steps) := {"name": "(raw)", "kind": "job", "environment": null, "image": image, "services": [], "steps": steps}
+
+_raw_images(doc) := {image |
+	walk(doc, [path, value])
+	count(path) > 0
+	path[count(path) - 1] == "image"
+	image := _raw_image_name(value)
+} | {image |
+	walk(doc, [path, value])
+	count(path) > 0
+	path[count(path) - 1] == "services"
+	is_array(value)
+	some entry in value
+	image := _raw_image_name(entry)
+}
+
+_raw_image_name(v) := trim_space(v) if {
+	is_string(v)
+	trim_space(v) != ""
+}
+
+_raw_image_name(v) := trim_space(v.name) if {
+	is_object(v)
+	is_string(v.name)
+	trim_space(v.name) != ""
+}
+
+_raw_azure_tasks(runtime, doc) := {task |
+	runtime == "azure_pipelines"
+	walk(doc, [path, task])
+	count(path) > 0
+	path[count(path) - 1] == "task"
+	is_string(task)
+}
+
+_raw_gitlab_includes(runtime, _) := [] if runtime != "gitlab_ci"
+
+_raw_gitlab_includes("gitlab_ci", doc) := [inc |
+	some entry in _raw_list(object.get(doc, "include", null))
+	some inc in _raw_gitlab_include(entry)
+]
+
+_raw_list(v) := v if is_array(v)
+
+else := [] if v == null
+
+else := [v]
+
+_raw_gitlab_include(entry) := {{"kind": "remote", "location": entry, "ref": null}} if {
+	is_string(entry)
+	regex.match(`^https?://`, entry)
+}
+
+_raw_gitlab_include(entry) := {{"kind": "local", "location": entry, "ref": null}} if {
+	is_string(entry)
+	not regex.match(`^https?://`, entry)
+}
+
+_raw_gitlab_include(entry) := {inc |
+	some kind in ["project", "component", "remote", "template", "local"]
+	location := entry[kind]
+	is_string(location)
+	inc := {"kind": kind, "location": location, "ref": _raw_include_ref(kind, location, entry)}
+} if {
+	is_object(entry)
+}
+
+# A component's ref is its `@<version>`; a project's is its `ref:`.
+_raw_include_ref(kind, location, entry) := ref if {
+	kind == "component"
+	parts := split(location, "@")
+	count(parts) > 1
+	ref := parts[count(parts) - 1]
+} else := entry.ref if {
+	kind != "component"
+	is_string(entry.ref)
+} else := null
+
 # A pipeline that only deploys: the GitHub workflow that runs the ECS deploy
-# action (ADR-0062), or an Azure pipeline whose every job is a `deployment:`
-# job. It applies an artifact; it has no suite to run.
+# action (ADR-0062), an Azure pipeline whose every job is a `deployment:` job,
+# or a GitLab pipeline whose every job names an `environment:`. It applies an
+# artifact; it has no suite to run.
 _pipeline_is_deploy(p) if {
 	p.runtime == "github_actions"
 	some job in p.jobs
@@ -99,7 +229,7 @@ _pipeline_is_deploy(p) if {
 }
 
 _pipeline_is_deploy(p) if {
-	p.runtime == "azure_pipelines"
+	p.runtime in {"azure_pipelines", "gitlab_ci"}
 	count(p.jobs) > 0
 	every job in p.jobs {
 		job.kind == "deployment"
@@ -120,11 +250,56 @@ _pipeline_is_fragment(p) if {
 	count(p.jobs) == 0
 }
 
+# GitLab step templates (`.gitlab/ci/steps/`) are included only from the
+# template, and a file that only `include:`s has no jobs of its own: both are
+# judged through the template that holds the jobs.
+_pipeline_is_fragment(p) if {
+	p.runtime == "gitlab_ci"
+	startswith(p.path, ".gitlab/ci/steps/")
+}
+
+_pipeline_is_fragment(p) if {
+	p.runtime == "gitlab_ci"
+	count(object.get(p, "includes", [])) > 0
+	count(p.jobs) == 0
+}
+
 # The pipelines the step rules (test, lint) judge.
 _ci_pipelines contains p if {
 	some p in _pipelines
 	not _pipeline_is_deploy(p)
 	not _pipeline_is_fragment(p)
+}
+
+# A runtime whose only non-deploy pipelines are fragments (a GitLab template
+# that only `include:`s `.gitlab/ci/steps/jobs.yml`, an Azure caller beside
+# step templates and no root) would otherwise leave the step rules nothing to
+# judge, and a proposal with no test step would pass. Its fragments' jobs are
+# what the runtime runs, so they are judged together as one pipeline.
+_ci_pipelines contains p if {
+	some runtime in {q.runtime | some q in _pipelines}
+	not _runtime_has_ci_pipeline(runtime)
+	fragments := [q |
+		some q in _pipelines
+		q.runtime == runtime
+		_pipeline_is_fragment(q)
+		not _pipeline_is_deploy(q)
+	]
+	jobs := [job | some q in fragments; some job in q.jobs]
+	count(jobs) > 0
+	p := {
+		"path": concat(" + ", sort([q.path | some q in fragments])),
+		"runtime": runtime,
+		"extends": null,
+		"jobs": jobs,
+	}
+}
+
+_runtime_has_ci_pipeline(runtime) if {
+	some q in _pipelines
+	q.runtime == runtime
+	not _pipeline_is_deploy(q)
+	not _pipeline_is_fragment(q)
 }
 
 _model_job_deploys_to_ecs(job) if {

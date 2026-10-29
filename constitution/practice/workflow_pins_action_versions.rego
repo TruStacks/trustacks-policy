@@ -15,7 +15,12 @@
 # step must name a FULL version (`Name@X.Y.Z`; `@2` silently takes new minor
 # versions), and every container a job or step runs in must be pinned by
 # digest (`@sha256:` and 64 hex). A full task version is version-pinned, not
-# immutable: the docs and the PR body say so.
+# immutable: the docs and the PR body say so. GitLab CI: no tasks; every job
+# and service image is pinned by digest, and every `include:` names a commit
+# SHA (or is `local`, this repo at this commit).
+#
+# `_pinned_pipelines` is the model plus, when no model was sent (the CI policy
+# check on a repository), the Azure and GitLab files read raw (lib.rego).
 
 package proposal
 
@@ -31,7 +36,7 @@ rule_metadata["practice.workflow_pins_action_versions"] := {
 }
 
 deny contains msg if {
-	some p in _pipelines
+	some p in _pinned_pipelines
 	p.runtime == "github_actions"
 	some unpinned in _unpinned_uses_refs(p)
 	parts := split(unpinned, "@")
@@ -47,7 +52,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
-	some p in _pipelines
+	some p in _pinned_pipelines
 	p.runtime == "github_actions"
 	some unpinned in _unpinned_uses_refs(p)
 	parts := split(unpinned, "@")
@@ -64,7 +69,7 @@ deny contains msg if {
 
 # Azure Pipelines: a task step names a full version.
 deny contains msg if {
-	some p in _pipelines
+	some p in _pinned_pipelines
 	p.runtime == "azure_pipelines"
 	some job in p.jobs
 	some step in job.steps
@@ -81,7 +86,7 @@ deny contains msg if {
 
 # Azure Pipelines: every container a job or step runs in is pinned by digest.
 deny contains msg if {
-	some p in _pipelines
+	some p in _pinned_pipelines
 	p.runtime == "azure_pipelines"
 	some image in _azure_pipeline_images(p)
 	not regex.match(`@sha256:[0-9a-f]{64}$`, image)
@@ -103,6 +108,58 @@ _azure_pipeline_images(p) := {image |
 	some step in job.steps
 	image := step.image
 	is_string(image)
+}
+
+# GitLab CI: every image a job or its services run in is pinned by digest.
+deny contains msg if {
+	some p in _pinned_pipelines
+	p.runtime == "gitlab_ci"
+	some image in _gitlab_pipeline_images(p)
+	not regex.match(`@sha256:[0-9a-f]{64}$`, image)
+	msg := {
+		"rule_id": "practice.workflow_pins_action_versions",
+		"message": sprintf(
+			"pipeline %v: image `%v` should be pinned by digest (image@sha256:...), not a tag",
+			[p.path, image],
+		),
+	}
+}
+
+# GitLab CI: an include names a ref that can't move. `local` is this repo at
+# this commit; `project` and `component` must name a full commit SHA; `remote`
+# and `template` have no ref at all.
+deny contains msg if {
+	some p in _pinned_pipelines
+	p.runtime == "gitlab_ci"
+	some inc in object.get(p, "includes", [])
+	not _gitlab_include_pinned(inc)
+	msg := {
+		"rule_id": "practice.workflow_pins_action_versions",
+		"message": sprintf(
+			"pipeline %v: `include: %v` (%v) should name a full 40-character commit SHA; a branch, tag or URL can change under the same name",
+			[p.path, object.get(inc, "kind", "?"), object.get(inc, "location", "?")],
+		),
+	}
+}
+
+_gitlab_include_pinned(inc) if inc.kind == "local"
+
+_gitlab_include_pinned(inc) if {
+	inc.kind in {"project", "component"}
+	is_string(inc.ref)
+	regex.match(`^[0-9a-f]{40}$`, inc.ref)
+}
+
+# An image is a string or, as GitLab also allows, a mapping with a `name`
+# (`_raw_image_name`, lib.rego): an unpinned image written as a mapping is
+# still judged.
+_gitlab_pipeline_images(p) := {image |
+	some job in p.jobs
+	image := _raw_image_name(job.image)
+} | {image |
+	some job in p.jobs
+	some svc in object.get(job, "services", [])
+	image := _raw_image_name(svc)
 }
 
 # A ref "looks like" a near-SHA when it's hex-only AND the length is in

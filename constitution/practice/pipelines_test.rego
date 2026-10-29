@@ -242,12 +242,12 @@ test_has_workflow_follows_the_runtime if {
 
 test_an_unsupported_ci_runtime_is_denied_and_opens_no_paths if {
 	inp := pl_input(
-		[{"path": ".gitlab-ci.yml", "content": ""}, {"path": "anything/at/all.yml", "content": ""}],
-		{"context": {"ci_runtime": "gitlab_ci"}},
+		[{"path": "Jenkinsfile", "content": ""}, {"path": "anything/at/all.yml", "content": ""}],
+		{"context": {"ci_runtime": "jenkins"}},
 	)
 	msgs := pl_messages(inp, "proposal.allowed_paths")
 	some m in msgs
-	contains(m, "unsupported CI runtime gitlab_ci")
+	contains(m, "unsupported CI runtime jenkins")
 	some n in msgs
 	contains(n, "anything/at/all.yml")
 	proposal.ci_runtime == "github_actions" with input as inp
@@ -261,14 +261,263 @@ test_a_non_string_ci_runtime_is_denied if {
 }
 
 test_supported_ci_runtimes_raise_no_runtime_denial if {
-	every r in ["github_actions", "azure_pipelines"] {
+	every r in ["github_actions", "azure_pipelines", "gitlab_ci"] {
 		inp := pl_input([], {"context": {"ci_runtime": r}})
 		count([m | some m in pl_messages(inp, "proposal.allowed_paths"); contains(m, "unsupported")]) == 0
 	}
+}
+
+# ---- GitLab CI (ADR-0071 decision 5) ----------------------------------------------------
+
+pl_gitlab(path, jobs, includes) := {"path": path, "runtime": "gitlab_ci", "extends": null, "includes": includes, "triggers": ["push"], "jobs": jobs}
+
+pl_gitlab_input(pipelines) := pl_input(
+	[{"path": p.path, "content": "(model only)"} | some p in pipelines],
+	{"proposal": {"pipelines": pipelines}, "context": {"ci_runtime": "gitlab_ci"}},
+)
+
+pl_digest := concat("", ["python:3.12-slim@sha256:", concat("", [x | some _ in numbers.range(1, 64); x := "a"])])
+
+pl_gitlab_job(name, image, services, steps) := {"name": name, "kind": "job", "environment": null, "image": image, "services": services, "steps": steps}
+
+pl_gitlab_ci := pl_gitlab(
+	".gitlab/ci/ci-api.yml", [pl_gitlab_job("test", pl_digest, [], [
+		{"run": "pip install -r requirements.txt"},
+		{"run": "ruff check ."},
+		{"run": "pytest"},
+	])],
+	[],
+)
+
+test_gitlab_template_with_test_lint_and_digests_passes if {
+	denied := pl_denied(pl_gitlab_input([pl_gitlab_ci]))
+	not "practice.workflow_has_test_step" in denied
+	not "practice.workflow_has_lint_step" in denied
+	not "practice.workflow_pins_action_versions" in denied
+	not "proposal.allowed_paths" in denied
+	not "proposal.has_workflow" in denied
+}
+
+test_gitlab_template_without_a_test_step_is_denied if {
+	job := pl_gitlab_job("test", pl_digest, [], [{"run": "ruff check ."}])
+	inp := pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", [job], [])])
+	"practice.workflow_has_test_step" in pl_denied(inp)
+}
+
+test_gitlab_job_image_by_tag_is_denied if {
+	job := pl_gitlab_job("test", "python:3.12-slim", [], [{"run": "ruff check ."}, {"run": "pytest"}])
+	inp := pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", [job], [])])
+	some m in pl_messages(inp, "practice.workflow_pins_action_versions")
+	contains(m, "image `python:3.12-slim` should be pinned by digest")
+}
+
+test_gitlab_service_image_by_tag_is_denied if {
+	job := pl_gitlab_job("test", pl_digest, ["postgres:latest"], [{"run": "ruff check ."}, {"run": "pytest"}])
+	inp := pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", [job], [])])
+	some m in pl_messages(inp, "practice.workflow_pins_action_versions")
+	contains(m, "postgres:latest")
+}
+
+test_gitlab_includes_must_name_a_commit_sha if {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	ok := [
+		{"kind": "local", "location": ".gitlab/ci/steps/x.yml", "ref": null},
+		{"kind": "project", "location": "acme/platform", "ref": sha},
+		{"kind": "component", "location": concat("", ["gitlab.com/acme/c/lint@", sha]), "ref": sha},
+	]
+	clean := pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", pl_gitlab_ci.jobs, ok)])
+	count(pl_messages(clean, "practice.workflow_pins_action_versions")) == 0
+
+	bad := [
+		{"kind": "project", "location": "acme/platform", "ref": "main"},
+		{"kind": "project", "location": "acme/platform", "ref": null},
+		{"kind": "component", "location": "gitlab.com/acme/c/lint@1.2.0", "ref": "1.2.0"},
+		{"kind": "remote", "location": "https://example.invalid/ci.yml", "ref": null},
+		{"kind": "template", "location": "Auto-DevOps.gitlab-ci.yml", "ref": null},
+	]
+	dirty := pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", pl_gitlab_ci.jobs, bad)])
+	count(pl_messages(dirty, "practice.workflow_pins_action_versions")) == 4
+}
+
+test_gitlab_step_template_and_include_only_file_are_not_judged_on_their_own if {
+	bare := pl_gitlab_job("extra", pl_digest, [], [{"run": "echo hi"}])
+	inp := pl_gitlab_input([
+		pl_gitlab_ci,
+		pl_gitlab(".gitlab/ci/steps/extra.yml", [bare], []),
+		pl_gitlab(".gitlab/ci/all.yml", [], [{"kind": "local", "location": ".gitlab/ci/ci-api.yml", "ref": null}]),
+	])
+	not "practice.workflow_has_test_step" in pl_denied(inp)
+	not "practice.workflow_has_lint_step" in pl_denied(inp)
+}
+
+# A template that only includes a step fragment is not a way around the step
+# rules: the fragment's jobs are what GitLab runs, so they are judged.
+test_gitlab_template_that_only_includes_steps_is_judged_through_them if {
+	bare := pl_gitlab_job("build", pl_digest, [], [{"run": "echo build"}])
+	inp := pl_gitlab_input([
+		pl_gitlab(".gitlab/ci/ci-api.yml", [], [{"kind": "local", "location": ".gitlab/ci/steps/jobs.yml", "ref": null}]),
+		pl_gitlab(".gitlab/ci/steps/jobs.yml", [bare], []),
+	])
+	denied := pl_denied(inp)
+	"practice.workflow_has_test_step" in denied
+	"practice.workflow_has_lint_step" in denied
+
+	good := pl_gitlab_input([
+		pl_gitlab(".gitlab/ci/ci-api.yml", [], [{"kind": "local", "location": ".gitlab/ci/steps/jobs.yml", "ref": null}]),
+		pl_gitlab(".gitlab/ci/steps/jobs.yml", pl_gitlab_ci.jobs, []),
+	])
+	not "practice.workflow_has_test_step" in pl_denied(good)
+	not "practice.workflow_has_lint_step" in pl_denied(good)
+}
+
+test_azure_step_templates_without_a_root_are_judged_through_them if {
+	caller := {"path": "azure-pipelines.yml", "runtime": "azure_pipelines", "extends": "templates/ci.yml@platform", "triggers": ["trigger"], "jobs": []}
+	bare := pl_job("default", [{"run": "echo fragment"}])
+	inp := pl_azure_input([caller, pl_azure("azure-pipelines/templates/steps/extra.yml", [bare])])
+	"practice.workflow_has_test_step" in pl_denied(inp)
+}
+
+test_gitlab_include_with_a_missing_field_is_still_denied if {
+	inp := pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", pl_gitlab_ci.jobs, [{"kind": "remote"}, {"location": "acme/platform"}])])
+	msgs := pl_messages(inp, "practice.workflow_pins_action_versions")
+	count(msgs) == 2
+	some m in msgs
+	contains(m, "`include: remote` (?)")
+}
+
+test_gitlab_image_and_service_written_as_mappings_are_judged if {
+	job := pl_gitlab_job("test", {"name": "python:3.12-slim", "entrypoint": [""]}, [{"name": "postgres:16"}], pl_gitlab_ci.jobs[0].steps)
+	msgs := pl_messages(pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", [job], [])]), "practice.workflow_pins_action_versions")
+	some a in msgs
+	contains(a, "image `python:3.12-slim`")
+	some b in msgs
+	contains(b, "image `postgres:16`")
+
+	pinned := pl_gitlab_job("test", {"name": pl_digest}, [{"name": pl_digest}], pl_gitlab_ci.jobs[0].steps)
+	count(pl_messages(pl_gitlab_input([pl_gitlab(".gitlab/ci/ci-api.yml", [pinned], [])]), "practice.workflow_pins_action_versions")) == 0
+}
+
+test_gitlab_deploy_only_pipeline_needs_no_test_step if {
+	deploy := object.union(pl_gitlab_job("deploy", pl_digest, [], [{"run": "./deploy.sh"}]), {"kind": "deployment", "environment": "prod"})
+	inp := pl_gitlab_input([pl_gitlab_ci, pl_gitlab(".gitlab/ci/deploy-api.yml", [deploy], [])])
+	not "practice.workflow_has_test_step" in pl_denied(inp)
+}
+
+test_gitlab_runtime_paths if {
+	count(pl_paths_denied([".gitlab/ci/ci-api.yml", ".gitlab/ci/steps/x.yaml", "gitops/a/b/c/Chart.yaml"], "gitlab_ci")) == 0
+
+	# Never the platform repo's own root pipeline, never another runtime's.
+	denied := pl_paths_denied([".gitlab-ci.yml", ".github/workflows/ci.yaml", "azure-pipelines.yml"], "gitlab_ci")
+	denied == {".gitlab-ci.yml", ".github/workflows/ci.yaml", "azure-pipelines.yml"}
+	pl_paths_denied([".gitlab/ci/ci-api.yml"], "github_actions") == {".gitlab/ci/ci-api.yml"}
+}
+
+test_has_workflow_on_gitlab if {
+	gl := pl_input([{"path": ".gitlab/ci/ci-api.yml", "content": ""}], {"context": {"ci_runtime": "gitlab_ci"}})
+	not "proposal.has_workflow" in pl_denied(gl)
+	root_only := pl_input([{"path": ".gitlab-ci.yml", "content": ""}], {"context": {"ci_runtime": "gitlab_ci"}})
+	"proposal.has_workflow" in pl_denied(root_only)
 }
 
 test_prod_environment_rule_covers_both_kinds if {
 	meta := proposal.rule_metadata["practice.workflow_prod_deploy_requires_environment"]
 	meta.target_kinds == ["ecs-fargate", "kubernetes"]
 	contains(meta.description, "Azure Pipelines deployment job")
+}
+
+# ---- pinning without the model (the CI policy check on a repository) -------------
+#
+# ADR-0067's CI job sends a repository's own files and no model. Its GitLab and
+# Azure pipeline files are still judged for pinning, read raw.
+
+pl_raw_gitlab := `default:
+  image: python:3.12-slim
+include:
+  - project: acme/platform
+    ref: main
+    file: .gitlab/ci/ci-api.yml
+  - local: .gitlab/ci/steps/lint.yml
+test:
+  image:
+    name: golang:1.27
+  services:
+    - postgres:16
+    - name: redis:7
+  script: [go test ./...]
+`
+
+pl_raw_azure := `resources:
+  containers:
+    - container: trivy
+      image: aquasec/trivy:0.58.0
+jobs:
+  - job: build
+    steps:
+      - task: Docker@2
+      - script: make test
+`
+
+pl_raw_messages(path, content) := pl_messages(
+	pl_input([{"path": path, "content": content}], {}),
+	"practice.workflow_pins_action_versions",
+)
+
+test_raw_gitlab_ci_is_judged_for_pinning_when_no_model_is_sent if {
+	msgs := pl_raw_messages(".gitlab-ci.yml", pl_raw_gitlab)
+	some a in msgs
+	contains(a, "python:3.12-slim")
+	some b in msgs
+	contains(b, "golang:1.27")
+	some c in msgs
+	contains(c, "postgres:16")
+	some d in msgs
+	contains(d, "redis:7")
+	some e in msgs
+	contains(e, "include: project")
+	count(msgs) == 5
+}
+
+test_raw_gitlab_ci_pinned_by_digest_passes if {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	pinned := concat("\n", [
+		"include:",
+		concat("", ["  - project: acme/platform\n    ref: ", sha, "\n    file: x.yml"]),
+		"test:",
+		concat("", ["  image: ", pl_digest]),
+		"  script: [pytest]",
+		"",
+	])
+	count(pl_raw_messages(".gitlab/ci/ci-api.yml", pinned)) == 0
+}
+
+test_raw_azure_pipeline_is_judged_for_pinning_when_no_model_is_sent if {
+	msgs := pl_raw_messages("azure-pipelines.yml", pl_raw_azure)
+	some a in msgs
+	contains(a, "task `Docker@2`")
+	some b in msgs
+	contains(b, "aquasec/trivy:0.58.0")
+	count(msgs) == 2
+}
+
+# The raw read is for pinning only: the step rules don't judge a pipeline whose
+# steps they can't see.
+test_raw_pipelines_are_not_judged_by_the_step_rules if {
+	denied := pl_denied(pl_input([{"path": ".gitlab-ci.yml", "content": "test:\n  script: [echo]\n"}], {}))
+	not "practice.workflow_has_test_step" in denied
+	not "practice.workflow_has_lint_step" in denied
+}
+
+# A file outside the runtimes' locations is not a pipeline.
+test_raw_read_follows_the_runtime_paths if {
+	count(pl_raw_messages("ci/gitlab-ci.yml", pl_raw_gitlab)) == 0
+	count(pl_raw_messages(".gitlab/other.yml", pl_raw_gitlab)) == 0
+}
+
+# With a model, the model is judged and the raw files are not read again.
+test_raw_read_is_skipped_when_a_model_is_sent if {
+	inp := pl_input(
+		[{"path": ".gitlab-ci.yml", "content": pl_raw_gitlab}],
+		{"proposal": {"pipelines": [pl_gitlab_ci]}, "context": {"ci_runtime": "gitlab_ci"}},
+	)
+	count(pl_messages(inp, "practice.workflow_pins_action_versions")) == 0
 }
