@@ -164,6 +164,35 @@ runner_capability(name) if {
 	c == name
 }
 
+# ---- CI runtime (ADR-0071) -----------------------------------------------------
+#
+# Which CI runtime the proposal is for, sent by the runner as
+# `input.context.ci_runtime`: the runtime its agent was told to emit. Absent
+# means GitHub Actions, which every proposal was before the field, so an older
+# runner is judged exactly as before.
+
+default ci_runtime := "github_actions"
+
+ci_runtime := r if {
+	r := input.context.ci_runtime
+	is_string(r)
+	r != ""
+}
+
+# An Azure Pipelines file, by location: `azure-pipelines.yml` at the root or a
+# YAML file under `azure-pipelines/`.
+_is_azure_pipeline_path(path) if path in {"azure-pipelines.yml", "azure-pipelines.yaml"}
+
+_is_azure_pipeline_path(path) if {
+	startswith(path, "azure-pipelines/")
+	endswith(path, ".yml")
+}
+
+_is_azure_pipeline_path(path) if {
+	startswith(path, "azure-pipelines/")
+	endswith(path, ".yaml")
+}
+
 # ---- ECS Fargate artifacts (ADR-0062) ----------------------------------------
 
 # The action whose presence makes a workflow a deploy workflow. Kept in step

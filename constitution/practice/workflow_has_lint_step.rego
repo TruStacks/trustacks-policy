@@ -1,5 +1,6 @@
 # practice.workflow_has_lint_step — every CI workflow includes a lint or
-# static-analysis step. Same shape as `workflow_has_test_step`, lint runners.
+# static-analysis step. Same shape as `workflow_has_test_step`, lint runners,
+# and judged on the same neutral pipeline model (ADR-0071 §2).
 
 package proposal
 
@@ -13,18 +14,15 @@ rule_metadata["practice.workflow_has_lint_step"] := {
 }
 
 deny contains msg if {
-	some f in input.proposal.files
-	_is_workflow(f.path)
-	wf := yaml.unmarshal(f.content)
-	# A deploy workflow (ADR-0062) applies an artifact; it has no suite to
-	# run. The CI workflow beside it is still judged.
-	not _is_deploy_workflow(wf)
-	not _workflow_has_step_matching(wf, _lint_runner_substrings)
+	# Deploy pipelines and Azure step templates are skipped, as for the test
+	# step.
+	some p in _ci_pipelines
+	not _pipeline_has_step_matching(p, _lint_runner_substrings)
 	msg := {
 		"rule_id": "practice.workflow_has_lint_step",
 		"message": sprintf(
 			"workflow %v has no lint/static-analysis step (looked for any of: ruff, eslint, biome, golangci-lint, go vet, staticcheck, dotnet format, checkstyle, spotless, spotbugs, pmd, -Dlint in `run:` commands)",
-			[f.path],
+			[p.path],
 		),
 	}
 }

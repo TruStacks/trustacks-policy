@@ -16,6 +16,11 @@
 #
 # Kind-agnostic by construction (any workflow that runs the ECS deploy action),
 # declared for `ecs-fargate` because that is the only kind deployed that way.
+#
+# Judged on the neutral pipeline model (ADR-0071 §2): a GitHub job that runs
+# the ECS deploy action, or an Azure `deployment:` job, must name an
+# environment. For Azure that is also the only place approvals attach, and the
+# approvals themselves live outside YAML, so the same presence-only caveat holds.
 
 package proposal
 
@@ -31,27 +36,15 @@ rule_metadata["practice.workflow_prod_deploy_requires_environment"] := {
 
 deny contains msg if {
 	target_tier == "prod"
-	some f in input.proposal.files
-	_is_workflow(f.path)
-	wf := yaml.unmarshal(f.content)
-	some job_id, job in wf.jobs
-	_job_deploys_to_ecs(job)
-	not _job_has_environment(job)
+	some p in _pipelines
+	some job in p.jobs
+	_model_job_deploys(p, job)
+	not _model_job_has_environment(job)
 	msg := {
 		"rule_id": "practice.workflow_prod_deploy_requires_environment",
 		"message": sprintf(
 			"workflow %v: job %v deploys to a prod-tier target without an `environment:`; name one so the deploy can be held for approval",
-			[f.path, job_id],
+			[p.path, job.name],
 		),
 	}
-}
-
-_job_has_environment(job) if {
-	is_string(job.environment)
-	trim_space(job.environment) != ""
-}
-
-_job_has_environment(job) if {
-	is_string(job.environment.name)
-	trim_space(job.environment.name) != ""
 }

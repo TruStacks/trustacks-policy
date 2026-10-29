@@ -1,5 +1,9 @@
 # practice.workflow_has_test_step — every CI workflow includes at least one
 # job step whose `run:` command invokes a recognised test runner.
+#
+# Judged on the neutral pipeline model (ADR-0071 §2), so it reads a GitHub
+# Actions workflow and an Azure Pipelines template the same way: a script step
+# (`run:` in GitHub, `script` / `bash` / `pwsh` in Azure) that runs the suite.
 
 package proposal
 
@@ -13,19 +17,17 @@ rule_metadata["practice.workflow_has_test_step"] := {
 }
 
 deny contains msg if {
-	some f in input.proposal.files
-	_is_workflow(f.path)
-	wf := yaml.unmarshal(f.content)
-	# A deploy workflow (ADR-0062) applies an artifact; it has no suite to
-	# run. The CI workflow beside it is still judged.
-	not _is_deploy_workflow(wf)
-	not _workflow_has_step_matching(wf, _test_runner_substrings)
-	not _workflow_has_step_matching_re(wf, _jvm_test_pattern)
+	# A deploy pipeline (ADR-0062) applies an artifact; it has no suite to run,
+	# and an Azure step template is judged through the template that includes
+	# it. The CI pipeline beside them is still judged.
+	some p in _ci_pipelines
+	not _pipeline_has_step_matching(p, _test_runner_substrings)
+	not _pipeline_has_step_matching_re(p, _jvm_test_pattern)
 	msg := {
 		"rule_id": "practice.workflow_has_test_step",
 		"message": sprintf(
 			"workflow %v has no step running the test suite (looked for pytest / npm test / yarn test / pnpm test / dotnet test / go test, or a Maven or Gradle invocation of `test`, `verify` or `check`, in `run:` commands)",
-			[f.path],
+			[p.path],
 		),
 	}
 }
