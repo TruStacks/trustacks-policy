@@ -16,42 +16,37 @@
 #
 # Kind-agnostic by construction (any workflow that runs the ECS deploy action),
 # declared for `ecs-fargate` because that is the only kind deployed that way.
+#
+# Judged on the neutral pipeline model (ADR-0071 §2): a GitHub job that runs
+# the ECS deploy action, or an Azure `deployment:` job, must name an
+# environment. For Azure that is also the only place approvals attach, and the
+# approvals themselves live outside YAML, so the same presence-only caveat holds.
 
 package proposal
 
 import rego.v1
 
 rule_metadata["practice.workflow_prod_deploy_requires_environment"] := {
-	"description": "On a prod-tier target, every job that deploys (aws-actions/amazon-ecs-deploy-task-definition) declares a GitHub environment. Presence only: the environment's reviewers are not verified.",
+	"description": "On a prod-tier target, every job that deploys names an environment: a GitHub Actions job running aws-actions/amazon-ecs-deploy-task-definition, or an Azure Pipelines deployment job. Presence only: the environment's approvals and reviewers are not verified.",
 	"required_tooling_categories": [],
 	"practice_dimensions": [],
 	"tier_scope": ["prod"],
-	"target_kinds": ["ecs-fargate"],
+	# ECS Fargate deploys through the GitHub workflow (ADR-0062); an Azure
+	# `deployment:` job can deploy to either kind (ADR-0071, ADR-0069).
+	"target_kinds": ["ecs-fargate", "kubernetes"],
 }
 
 deny contains msg if {
 	target_tier == "prod"
-	some f in input.proposal.files
-	_is_workflow(f.path)
-	wf := yaml.unmarshal(f.content)
-	some job_id, job in wf.jobs
-	_job_deploys_to_ecs(job)
-	not _job_has_environment(job)
+	some p in _pipelines
+	some job in p.jobs
+	_model_job_deploys(p, job)
+	not _model_job_has_environment(job)
 	msg := {
 		"rule_id": "practice.workflow_prod_deploy_requires_environment",
 		"message": sprintf(
 			"workflow %v: job %v deploys to a prod-tier target without an `environment:`; name one so the deploy can be held for approval",
-			[f.path, job_id],
+			[p.path, job.name],
 		),
 	}
-}
-
-_job_has_environment(job) if {
-	is_string(job.environment)
-	trim_space(job.environment) != ""
-}
-
-_job_has_environment(job) if {
-	is_string(job.environment.name)
-	trim_space(job.environment.name) != ""
 }
