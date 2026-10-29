@@ -70,7 +70,116 @@ ci_workflow_template: |
   name: ci-<service>
   on:
     workflow_call:
+      inputs:
+        # ADR-0067: the policy check is report-only until you turn this on.
+        # Then make the `policy-check` job a required check on the branch.
+        enforce:
+          description: Fail the TruStacks policy check on any violation.
+          type: boolean
+          default: false
   jobs:
+    # ADR-0067 decision 3: the TruStacks policy check. Judges the service
+    # repo's own delivery files (Dockerfiles, workflows, ECS task definitions)
+    # with the same signed constitution the TruStacks runner uses, on every PR,
+    # whoever or whatever wrote it. It verifies the bundle's keyless cosign
+    # signature (trustacks-policy's publish workflow) before evaluating, uses no
+    # secret and only reads the repo. Report-only unless the caller passes
+    # `enforce: true`.
+    policy-check:
+      runs-on: ubuntu-latest
+      permissions:
+        contents: read
+      steps:
+        - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        - name: TruStacks policy check
+          env:
+            TRUSTACKS_ENFORCE: ${{ inputs.enforce }}
+          run: |
+            set -euo pipefail
+            # TruStacks policy check (ADR-0067 decision 3). Judges this repo's delivery
+            # files (Dockerfiles, CI workflows, ECS task definitions) with the same signed
+            # constitution bundle the TruStacks runner uses. Report-only unless enforce is
+            # on; it never needs a secret.
+            BUNDLE="${TRUSTACKS_POLICY_BUNDLE:-ghcr.io/trustacks/policy/constitution:1}"
+            IDENTITY='^https://github\.com/TruStacks/trustacks-policy/\.github/workflows/publish\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+            ISSUER=https://token.actions.githubusercontent.com
+            SRC="${GITHUB_WORKSPACE:-${BUILD_SOURCESDIRECTORY:-$PWD}}"
+            T="$(mktemp -d "${RUNNER_TEMP:-${AGENT_TEMPDIRECTORY:-/tmp}}/trustacks-policy.XXXXXX")"
+
+            # Tools at the TruStacks runner's versions, each checked against its
+            # release checksum before it runs.
+            fetch() { curl -fsSL --retry 3 -o "$T/$1" "$2"; echo "$3  $T/$1" | sha256sum -c --quiet -; }
+            fetch opa https://github.com/open-policy-agent/opa/releases/download/v1.15.2/opa_linux_amd64_static a9d9481e463e7af8cb1a2cd7c3deb764f0327b3281c54e632546c2f425fc0824
+            fetch oras.tgz https://github.com/oras-project/oras/releases/download/v1.3.2/oras_1.3.2_linux_amd64.tar.gz 9229ccc6d17bb282039ad4a69abb16dcb887a5bce567c075d731d9b3c7ad8eaf
+            fetch cosign https://github.com/sigstore/cosign/releases/download/v3.0.6/cosign-linux-amd64 c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
+            tar -xzf "$T/oras.tgz" -C "$T" oras
+            chmod +x "$T/opa" "$T/oras" "$T/cosign"
+
+            # Resolve the tag once, then verify and pull that digest: a tag moved in
+            # between can't slip unverified bytes in.
+            case "$BUNDLE" in
+              *@sha256:*) PINNED="$BUNDLE" ;;
+              *) PINNED="${BUNDLE%:*}@$("$T/oras" resolve "$BUNDLE")" ;;
+            esac
+            "$T/cosign" verify --certificate-identity-regexp "$IDENTITY" \
+              --certificate-oidc-issuer "$ISSUER" "$PINNED" > /dev/null
+            "$T/oras" pull -o "$T/bundle" "$PINNED" > /dev/null
+            echo "Policy bundle verified: $PINNED"
+
+            python3 - "$SRC" > "$T/input.json" <<'PY'
+            import json, os, sys
+            root = sys.argv[1]
+            skip = {".git", "node_modules", "vendor", "dist", "build", "target", ".venv"}
+            def delivery(rel):
+                parts = rel.lower().split("/")
+                name = parts[-1]
+                if name == "dockerfile" or name.endswith(".dockerfile") or name.startswith("dockerfile."):
+                    return True
+                if name == "containerfile":
+                    return True
+                if len(parts) >= 3 and parts[0] == ".github" and parts[1] == "workflows":
+                    return name.endswith((".yml", ".yaml"))
+                return name == "task-definition.json" or name.endswith(".task-definition.json")
+            files = []
+            for dirpath, dirs, names in os.walk(root):
+                dirs[:] = sorted(d for d in dirs if d not in skip)
+                for n in sorted(names):
+                    path = os.path.join(dirpath, n)
+                    rel = os.path.relpath(path, root).replace(os.sep, "/")
+                    if not delivery(rel) or len(files) >= 200 or os.path.getsize(path) > 256 * 1024:
+                        continue
+                    try:
+                        with open(path, encoding="utf-8") as fh:
+                            files.append({"path": rel, "content": fh.read()})
+                    except (OSError, UnicodeDecodeError):
+                        continue
+            json.dump({"proposal": {"files": files}, "context": {"subject": "repo", "platform_repo_url": ""}}, sys.stdout)
+            PY
+
+            # Only rules that declare they can judge a repo's own files (subjects: repo).
+            "$T/opa" eval --bundle "$T/bundle/bundle.tar.gz" --input "$T/input.json" --format raw \
+              '[v | some v in data.proposal.deny; "repo" in object.get(object.get(data.proposal.rule_metadata, v.rule_id, {}), "subjects", ["proposal"])]' \
+              > "$T/violations.json"
+
+            python3 - "$T/violations.json" "${TRUSTACKS_ENFORCE:-false}" <<'PY'
+            import json, os, sys
+            violations = json.load(open(sys.argv[1]))
+            enforce = sys.argv[2].lower() == "true"
+            gha = os.environ.get("GITHUB_ACTIONS") == "true"
+            lines = [f"- `{v['rule_id']}`: {v['message']}" for v in violations]
+            for v in violations:
+                print(f"::{'error' if enforce else 'warning'} title={v['rule_id']}::{v['message']}" if gha
+                      else f"{v['rule_id']}: {v['message']}")
+            summary = os.environ.get("GITHUB_STEP_SUMMARY")
+            if summary:
+                with open(summary, "a") as fh:
+                    fh.write("### TruStacks policy check\n\n")
+                    fh.write("\n".join(lines) + "\n" if lines else "No violations.\n")
+            print(f"TruStacks policy check: {len(violations)} violation(s)"
+                  + ("" if enforce or not violations else " (report-only; set enforce to block)"))
+            sys.exit(1 if enforce and violations else 0)
+            PY
+
     test:
       runs-on: ubuntu-latest
       steps:
@@ -130,6 +239,11 @@ ci_workflow_template: |
 ci_templates:
   azure_pipelines: |
       parameters:
+        # ADR-0067: the policy check is report-only until this is true.
+        - name: enforcePolicy
+          displayName: Fail the TruStacks policy check on any violation
+          type: boolean
+          default: false
         - name: containerRegistry
           displayName: Registry service connection (workload identity federation)
           type: string
@@ -137,6 +251,108 @@ ci_templates:
       stages:
         - stage: test
           jobs:
+            # ADR-0067 decision 3: the TruStacks policy check, the same signed
+            # constitution the runner uses, on this repo's delivery files. It
+            # verifies the bundle's signature first, uses no secret, and runs
+            # with restricted logging commands. Report-only unless
+            # enforcePolicy is true.
+            - job: policy_check
+              displayName: TruStacks policy check
+              pool:
+                vmImage: ubuntu-24.04
+              steps:
+                - checkout: self
+                - script: |
+                    set -euo pipefail
+                    # TruStacks policy check (ADR-0067 decision 3). Judges this repo's delivery
+                    # files (Dockerfiles, CI workflows, ECS task definitions) with the same signed
+                    # constitution bundle the TruStacks runner uses. Report-only unless enforce is
+                    # on; it never needs a secret.
+                    BUNDLE="${TRUSTACKS_POLICY_BUNDLE:-ghcr.io/trustacks/policy/constitution:1}"
+                    IDENTITY='^https://github\.com/TruStacks/trustacks-policy/\.github/workflows/publish\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+                    ISSUER=https://token.actions.githubusercontent.com
+                    SRC="${GITHUB_WORKSPACE:-${BUILD_SOURCESDIRECTORY:-$PWD}}"
+                    T="$(mktemp -d "${RUNNER_TEMP:-${AGENT_TEMPDIRECTORY:-/tmp}}/trustacks-policy.XXXXXX")"
+
+                    # Tools at the TruStacks runner's versions, each checked against its
+                    # release checksum before it runs.
+                    fetch() { curl -fsSL --retry 3 -o "$T/$1" "$2"; echo "$3  $T/$1" | sha256sum -c --quiet -; }
+                    fetch opa https://github.com/open-policy-agent/opa/releases/download/v1.15.2/opa_linux_amd64_static a9d9481e463e7af8cb1a2cd7c3deb764f0327b3281c54e632546c2f425fc0824
+                    fetch oras.tgz https://github.com/oras-project/oras/releases/download/v1.3.2/oras_1.3.2_linux_amd64.tar.gz 9229ccc6d17bb282039ad4a69abb16dcb887a5bce567c075d731d9b3c7ad8eaf
+                    fetch cosign https://github.com/sigstore/cosign/releases/download/v3.0.6/cosign-linux-amd64 c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
+                    tar -xzf "$T/oras.tgz" -C "$T" oras
+                    chmod +x "$T/opa" "$T/oras" "$T/cosign"
+
+                    # Resolve the tag once, then verify and pull that digest: a tag moved in
+                    # between can't slip unverified bytes in.
+                    case "$BUNDLE" in
+                      *@sha256:*) PINNED="$BUNDLE" ;;
+                      *) PINNED="${BUNDLE%:*}@$("$T/oras" resolve "$BUNDLE")" ;;
+                    esac
+                    "$T/cosign" verify --certificate-identity-regexp "$IDENTITY" \
+                      --certificate-oidc-issuer "$ISSUER" "$PINNED" > /dev/null
+                    "$T/oras" pull -o "$T/bundle" "$PINNED" > /dev/null
+                    echo "Policy bundle verified: $PINNED"
+
+                    python3 - "$SRC" > "$T/input.json" <<'PY'
+                    import json, os, sys
+                    root = sys.argv[1]
+                    skip = {".git", "node_modules", "vendor", "dist", "build", "target", ".venv"}
+                    def delivery(rel):
+                        parts = rel.lower().split("/")
+                        name = parts[-1]
+                        if name == "dockerfile" or name.endswith(".dockerfile") or name.startswith("dockerfile."):
+                            return True
+                        if name == "containerfile":
+                            return True
+                        if len(parts) >= 3 and parts[0] == ".github" and parts[1] == "workflows":
+                            return name.endswith((".yml", ".yaml"))
+                        return name == "task-definition.json" or name.endswith(".task-definition.json")
+                    files = []
+                    for dirpath, dirs, names in os.walk(root):
+                        dirs[:] = sorted(d for d in dirs if d not in skip)
+                        for n in sorted(names):
+                            path = os.path.join(dirpath, n)
+                            rel = os.path.relpath(path, root).replace(os.sep, "/")
+                            if not delivery(rel) or len(files) >= 200 or os.path.getsize(path) > 256 * 1024:
+                                continue
+                            try:
+                                with open(path, encoding="utf-8") as fh:
+                                    files.append({"path": rel, "content": fh.read()})
+                            except (OSError, UnicodeDecodeError):
+                                continue
+                    json.dump({"proposal": {"files": files}, "context": {"subject": "repo", "platform_repo_url": ""}}, sys.stdout)
+                    PY
+
+                    # Only rules that declare they can judge a repo's own files (subjects: repo).
+                    "$T/opa" eval --bundle "$T/bundle/bundle.tar.gz" --input "$T/input.json" --format raw \
+                      '[v | some v in data.proposal.deny; "repo" in object.get(object.get(data.proposal.rule_metadata, v.rule_id, {}), "subjects", ["proposal"])]' \
+                      > "$T/violations.json"
+
+                    python3 - "$T/violations.json" "${TRUSTACKS_ENFORCE:-false}" <<'PY'
+                    import json, os, sys
+                    violations = json.load(open(sys.argv[1]))
+                    enforce = sys.argv[2].lower() == "true"
+                    gha = os.environ.get("GITHUB_ACTIONS") == "true"
+                    lines = [f"- `{v['rule_id']}`: {v['message']}" for v in violations]
+                    for v in violations:
+                        print(f"::{'error' if enforce else 'warning'} title={v['rule_id']}::{v['message']}" if gha
+                              else f"{v['rule_id']}: {v['message']}")
+                    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+                    if summary:
+                        with open(summary, "a") as fh:
+                            fh.write("### TruStacks policy check\n\n")
+                            fh.write("\n".join(lines) + "\n" if lines else "No violations.\n")
+                    print(f"TruStacks policy check: {len(violations)} violation(s)"
+                          + ("" if enforce or not violations else " (report-only; set enforce to block)"))
+                    sys.exit(1 if enforce and violations else 0)
+                    PY
+                  displayName: TruStacks policy check
+                  target:
+                    commands: restricted
+                  env:
+                    TRUSTACKS_ENFORCE: ${{ parameters.enforcePolicy }}
+
             - job: test
               pool:
                 vmImage: ubuntu-24.04
