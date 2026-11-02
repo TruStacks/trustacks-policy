@@ -2,6 +2,8 @@
 #
 # Profile category: sbom_signing
 # Marketplace: https://github.com/marketplace/actions/anchore-sbom-action
+# Verified 2026-11-02: tag v0.24.3 -> commit 66cbf4bc… (runs on node24; the
+# earlier pin was not a commit in anchore/sbom-action).
 #
 # Anchore publishes the canonical Syft GitHub Action. The action wraps
 # the syft CLI; despite the "anchore/" prefix on the action name, the
@@ -13,8 +15,8 @@ tool_name: syft
 display_name: Syft (anchore/sbom-action)
 profile_categories:
   - sbom_signing
-action: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4dee
-action_version_label: v0.17.7
+action: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+action_version_label: v0.24.3
 inputs:
   format: spdx-json
   output-file: sbom.spdx.json
@@ -27,4 +29,4 @@ notes: |
   cosign for sbom_signing. The default output path `sbom.spdx.json` can
   be overridden per-framework if the framework pack specifies a
   different artifact convention.
-last_verified: "2026-05-05"
+last_verified: "2026-11-02"
