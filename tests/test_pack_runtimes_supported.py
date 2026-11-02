@@ -18,6 +18,10 @@ one is refreshed.
   .NET 8, not a silent upgrade), each with the snapshot's end-of-life date. An
   older entry may stay only until that date; then this test fails so it gets
   removed.
+- A removed entry is recorded under ``runtimes.retired`` with the snapshot's
+  end-of-life date and a replacement entry, so the runtime note can say when it
+  reached end of life and what to move to. Retired records are *meant* to
+  outlive their end of life; only their date and replacement are checked.
 
 **This test is dated on purpose.** It reads today's date, so it goes red as a
 pinned runtime approaches its end of life, with time to act. When it fails,
@@ -151,6 +155,34 @@ def test_runtime_entries_follow_the_snapshot(pack_path: Path) -> None:
 
 
 @pytest.mark.parametrize("pack_path", _pack_files(), ids=lambda p: p.stem)
+def test_retired_runtimes_follow_the_snapshot(pack_path: Path) -> None:
+    """A retired record states the snapshot's end-of-life date and points at a
+    runtime the pack still builds on. It is never flagged for being past its end
+    of life: saying so in the PR body is what it is for."""
+    runtimes = _raw(pack_path).get("runtimes")
+    if runtimes is None or not runtimes.get("retired"):
+        pytest.skip("pack has no retired runtimes")
+    products = _snapshot()
+    product = _PRODUCT[pack_path.stem]
+    ids = {str(e["id"]) for e in runtimes["entries"]}
+    for record in runtimes["retired"]:
+        version = str(record["version"])
+        snap = _eol(products, product, version)
+        assert snap is not None, (
+            f"{pack_path.name}: retired runtime {version} has no end of life in the snapshot"
+        )
+        assert _as_date(record.get("end_of_life")) == snap, (
+            f"{pack_path.name} retired {version}: end_of_life "
+            f"{record.get('end_of_life')!r} != snapshot {snap}"
+        )
+        assert version not in ids, f"{pack_path.name}: {version} is both an entry and retired"
+        assert str(record["replacement"]) in ids, (
+            f"{pack_path.name} retired {version}: replacement {record['replacement']!r} "
+            "is not an entry"
+        )
+
+
+@pytest.mark.parametrize("pack_path", _pack_files(), ids=lambda p: p.stem)
 def test_default_entry_pins_are_what_the_templates_say(pack_path: Path) -> None:
     """Selecting another entry swaps the default's pins in the templates, so
     every default pin must appear there, or the swap would silently do nothing."""
@@ -185,3 +217,15 @@ def test_go_and_dotnet_default_to_the_current_releases() -> None:
         assert "golang:1.23" not in text and 'go-version: "1.23"' not in text
         assert "dotnet/sdk:8.0" not in text and "aspnet:8.0" not in text
         assert '"8.0.x"' not in text
+
+
+def test_dotnet_8_is_recorded_as_retired() -> None:
+    """#803 removed .NET 8 from the dotnet pack; the record keeps its end of life
+    (2026-11-10) so a net8.0 project's note can name it."""
+    runtimes: dict[str, Any] = _raw(PACKS_DIR / "dotnet.yaml")["runtimes"]
+    records: list[dict[str, Any]] = runtimes.get("retired") or []
+    retired = {str(r["version"]): r for r in records}
+    assert "8" in retired, "dotnet.yaml: .NET 8 is not in runtimes.retired"
+    assert _as_date(retired["8"]["end_of_life"]) == date(2026, 11, 10)
+    assert "net8.0" in retired["8"]["match"]
+    assert str(retired["8"]["replacement"]) == str(runtimes["default"])

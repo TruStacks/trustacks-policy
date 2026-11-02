@@ -3,6 +3,8 @@
 # Profile category: sbom_signing (also commonly used for image signing,
 # which Profile-side falls under sbom_signing's umbrella today)
 # Marketplace: https://github.com/marketplace/actions/install-cosign
+# Verified 2026-11-02: tag v3.7.0 -> commit dc72c7d5… (composite action, no
+# Node runtime; the earlier pin had the right prefix and a wrong tail).
 #
 # Sigstore publishes cosign-installer which puts the cosign CLI on PATH;
 # the actual `cosign sign` / `cosign attest` invocation is then a
@@ -14,7 +16,7 @@ tool_name: cosign
 display_name: Cosign (sigstore/cosign-installer)
 profile_categories:
   - sbom_signing
-action: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8c6d3d9f6b7ce08e0c71f
+action: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da
 action_version_label: v3.7.0
 inputs:
   cosign-release: v2.4.1
@@ -26,4 +28,4 @@ notes: |
   signing is preferred (`COSIGN_EXPERIMENTAL=1`) when the workflow
   runs on github.com hosted runners; private/self-hosted runners may
   need explicit key configuration.
-last_verified: "2026-05-05"
+last_verified: "2026-11-02"
