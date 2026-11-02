@@ -260,10 +260,87 @@ _ecs_containers(content) := cs if {
 # Same pattern for `gap`: overlays can declare
 # `required_tooling_categories` on their rule_metadata; the join works
 # identically once the overlay's metadata is exposed in the data tree.
+#
+# Declared scope is enforced here (ADR-0065 §1): an overlay deny counts only
+# when the proposal's target is inside the `tier_scope` and `target_kinds` its
+# rule declares. A deny is matched to its rule by `msg.rule_id` against the
+# `rule_metadata` of its own package. Every way that can go wrong widens the
+# rule, never narrows it — a mistake in a description must not disarm a rule:
+#
+#   - no metadata for the rule_id, or the field undeclared (legacy rules)
+#                                   → "any"
+#   - a value outside the schema (["staging"], "prod" not in a list, [],
+#     "any" mixed with others, a kind the constitution doesn't know)
+#                                   → "any"
+#   - a tier-scoped rule and no tier in the context
+#                                   → skipped (it can't be shown to apply)
+#   - the repo audit (`input.context.subject == "repo"`, ADR-0067): there is
+#     no deployment target, so a rule scoped to a specific tier OR kind is
+#     skipped; an "any" rule still audits
+#
+# Kind follows `target_kind`, so an absent kind on a proposal is kubernetes,
+# as it is for every constitution rule. Constitution rules are NOT filtered by
+# their own metadata: they check tier and kind in their bodies, some with
+# fallbacks that work without a target (argocd_prod_requires_manual_sync's
+# `argo-apps-prod/` path), which a metadata filter would switch off.
 
 deny contains msg if {
 	some _, pkg in data.overlay
 	some msg in pkg.deny
+	not _overlay_deny_out_of_scope(pkg, msg)
+}
+
+# The target kinds the constitution knows. A kind scope naming anything else
+# is treated as "any": a typo must not silence a rule on every target.
+known_target_kinds := {"kubernetes", "ecs-fargate"}
+
+_tiers := {"dev", "uat", "prod"}
+
+# ADR-0067: the repo audit judges a repository's own files, not a deployment.
+judging_repo if input.context.subject == "repo"
+
+_normalise_kind(k) := replace(lower(k), "_", "-")
+
+_overlay_deny_out_of_scope(pkg, msg) if {
+	meta := pkg.rule_metadata[msg.rule_id]
+	_scoped_tiers(meta.tier_scope)
+	not _overlay_tier_matches(meta.tier_scope)
+}
+
+_overlay_deny_out_of_scope(pkg, msg) if {
+	meta := pkg.rule_metadata[msg.rule_id]
+	_scoped_kinds(meta.target_kinds)
+	not _overlay_kind_matches(meta.target_kinds)
+}
+
+# A tier scope that narrows: a non-empty list of dev/uat/prod only.
+_scoped_tiers(scope) if {
+	is_array(scope)
+	count(scope) > 0
+	every t in scope {
+		t in _tiers
+	}
+}
+
+# A kind scope that narrows: a non-empty list of kinds the constitution knows.
+_scoped_kinds(scope) if {
+	is_array(scope)
+	count(scope) > 0
+	every k in scope {
+		is_string(k)
+		_normalise_kind(k) in known_target_kinds
+	}
+}
+
+_overlay_tier_matches(scope) if {
+	not judging_repo
+	target_tier in scope
+}
+
+_overlay_kind_matches(scope) if {
+	not judging_repo
+	some k in scope
+	_normalise_kind(k) == _normalise_kind(target_kind)
 }
 
 gap contains item if {
