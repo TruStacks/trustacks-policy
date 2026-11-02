@@ -21,6 +21,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 PACKS = Path(__file__).resolve().parents[1]
 
@@ -58,14 +59,42 @@ REVIEWED: dict[str, dict[str, str]] = {
 
 #: Pins that do not resolve and have no fix in this table. `semgrep/semgrep`
 #: is not a GitHub Action (its repo has no action.yml); the pack needs a
-#: redesign (container image + `semgrep ci`), not a new SHA. Listed so the gap
-#: is visible rather than passing as reviewed.
+#: redesign (container image + `semgrep ci`), not a new SHA (trustacks-mvp#828).
+#: Listed so the gap is visible rather than passing as reviewed.
 UNRESOLVED = {"semgrep/semgrep@b6c8e8b4f9e8b4a5e8b4f9e8b4a5e8b4f9e8b4a5"}
 
-_PIN = re.compile(r"(?:uses|action):\s*(?P<action>[\w.-]+/[\w./-]+)@(?P<sha>[0-9a-f]{40})")
-_TEMPLATE_USES = re.compile(
-    r"uses:\s*(?P<action>[\w.-]+/[\w./-]+)@(?P<sha>[0-9a-f]{40})(?P<rest>[^\n]*)"
-)
+#: Every `uses:` value, whatever its ref looks like: a tag, a branch, a short
+#: SHA and a full SHA are all found, so a ref that is not a reviewed SHA fails
+#: instead of going unseen. Matches inside templates and comments too, since
+#: the agent copies both.
+_USES = re.compile(r"""uses:\s*['"]?(?P<ref>[^\s#'"]+)['"]?(?P<rest>[^\n]*)""")
+_FULL_SHA = re.compile(r"^(?P<action>[\w.-]+/[\w./-]+)@(?P<sha>[0-9a-f]{40})$")
+
+
+def _is_local(ref: str) -> bool:
+    """Local actions and container images are not pinned by commit SHA."""
+    return ref.startswith(("./", "docker://"))
+
+
+def action_refs(text: str, action_field: str | None = None) -> list[str]:
+    """Every action reference in a pack: each `uses:` plus a tool-action pack's
+    `action:` field."""
+    refs = [m["ref"] for m in _USES.finditer(text) if not _is_local(m["ref"])]
+    if action_field is not None:
+        refs.append(action_field.strip())
+    return refs
+
+
+def unreviewed(refs: list[str]) -> list[str]:
+    """The refs that are not exactly a reviewed 40-char SHA from the table."""
+    bad: list[str] = []
+    for ref in refs:
+        if ref in UNRESOLVED:
+            continue
+        m = _FULL_SHA.match(ref)
+        if m is None or m["sha"] not in REVIEWED.get(m["action"], {}):
+            bad.append(ref)
+    return bad
 
 
 def _pack_files() -> list[Path]:
@@ -78,16 +107,50 @@ def _pack_files() -> list[Path]:
     return files
 
 
+def _refs_in(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    field = None
+    if path.parent.name == "tool-actions":
+        field = yaml.safe_load(text).get("action")
+        assert isinstance(field, str) and field, f"{path.name}: no `action:` field"
+    return action_refs(text, field)
+
+
 @pytest.mark.parametrize("path", _pack_files(), ids=lambda p: f"{p.parent.name}/{p.stem}")
-def test_every_pinned_sha_is_a_reviewed_one(path: Path) -> None:
-    for m in _PIN.finditer(path.read_text(encoding="utf-8")):
-        ref = f"{m['action']}@{m['sha']}"
-        if ref in UNRESOLVED:
-            continue
-        reviewed = REVIEWED.get(m["action"], {})
-        assert m["sha"] in reviewed, (
-            f"{path.name}: `{ref}` is not in the reviewed table (reviewed: {reviewed})"
-        )
+def test_every_action_reference_is_a_reviewed_sha(path: Path) -> None:
+    refs = _refs_in(path)
+    assert refs, f"{path.name}: no action reference found (premise)"
+    bad = unreviewed(refs)
+    assert not bad, f"{path.name}: not a reviewed 40-char SHA from the table: {bad}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "action: gitleaks/gitleaks-action@v3\n",
+        "steps:\n  - uses: actions/checkout@main\n",
+        "steps:\n  - uses: 'actions/checkout@v6'\n",
+        "steps:\n  - uses: actions/checkout@de0fac2\n",
+        "steps:\n  - uses: actions/checkout\n",
+        # a real-looking SHA that is not the reviewed one
+        "steps:\n  - uses: actions/checkout@" + "a" * 40 + "\n",
+        # a reviewed SHA under another action's name
+        "steps:\n  - uses: evil/action@de0fac2e4500dabe0009e67214ff5f5447ce83dd\n",
+    ],
+)
+def test_a_tag_branch_or_unreviewed_ref_fails(text: str) -> None:
+    """The scan must see a ref that is not a full SHA, not skip it."""
+    field = None
+    if text.startswith("action:"):
+        field = yaml.safe_load(text)["action"]
+        text = ""
+    refs = action_refs(text, field)
+    assert refs, "the reference was not found at all"
+    assert unreviewed(refs) == refs
+
+
+def test_local_actions_are_not_references() -> None:
+    assert action_refs("- uses: ./.github/actions/x\n- uses: docker://alpine:3\n") == []
 
 
 @pytest.mark.parametrize(
@@ -97,10 +160,12 @@ def test_framework_template_pins_name_their_tag(path: Path) -> None:
     """`uses: owner/repo@<sha> # vX.Y.Z` — the comment is how a reviewer reads a
     SHA, so it must be the tag the SHA was resolved from."""
     found = 0
-    for m in _TEMPLATE_USES.finditer(path.read_text(encoding="utf-8")):
+    for m in _USES.finditer(path.read_text(encoding="utf-8")):
+        pin = _FULL_SHA.match(m["ref"])
+        assert pin is not None, f"{path.name}: `{m['ref']}` is not a full SHA"
         found += 1
-        tag = REVIEWED[m["action"]][m["sha"]]
+        tag = REVIEWED[pin["action"]][pin["sha"]]
         assert m["rest"].strip() == f"# {tag}", (
-            f"{path.name}: `{m['action']}@{m['sha']}` should carry `# {tag}`, has {m['rest']!r}"
+            f"{path.name}: `{m['ref']}` should carry `# {tag}`, has {m['rest']!r}"
         )
     assert found, f"{path.name}: no pinned `uses:` found (premise)"
