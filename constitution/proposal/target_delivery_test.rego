@@ -31,6 +31,28 @@ test_target_delivery_ignores_an_empty_value if {
 	}
 }
 
+test_target_delivery_reads_an_unknown_value_as_gitops if {
+	every d in ["gitop", "flux", "PUSH", 1, true] {
+		proposal.target_delivery == "gitops" with input as {
+			"proposal": {"files": []},
+			"context": {"target": {"kind": "kubernetes", "delivery": d}},
+		}
+	}
+}
+
+# Fail closed: a misspelt delivery must not switch the ArgoCD requirement off.
+test_has_argocd_application_still_required_for_an_unknown_delivery if {
+	denies := {d |
+		some d in proposal.deny
+		d.rule_id == "proposal.has_argocd_application"
+	}
+		with input as {
+			"proposal": {"files": []},
+			"context": {"target": {"name": "gke", "kind": "kubernetes", "delivery": "gitop"}},
+		}
+	count(denies) == 1
+}
+
 test_has_argocd_application_still_required_for_gitops if {
 	denies := {d |
 		some d in proposal.deny

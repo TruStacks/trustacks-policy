@@ -137,12 +137,13 @@ target_distribution := d if {
 # ADR-0069: what applies a Kubernetes target's manifests — an ArgoCD
 # Application (gitops) or a deploy workflow in the customer's CI (push). Absent
 # means gitops, because every target that existed before the field is one.
+# Closed set: an unknown value also reads as gitops. Accepting any string
+# would fail open — `"gitop"` would turn off every gitops-only rule.
 default target_delivery := "gitops"
 
 target_delivery := d if {
 	d := input.context.target.delivery
-	is_string(d)
-	d != ""
+	d in {"gitops", "push"}
 }
 
 target_tier := t if {
