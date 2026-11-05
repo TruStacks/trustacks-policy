@@ -76,9 +76,7 @@ test_kustomize_proposal_is_not_denied_for_lacking_a_chart if {
 }
 
 test_deny_when_kustomize_proposal_has_no_kustomization if {
-	no_kustomization := object.union(good_input, {
-		"context": {"platform_repo_url": PLATFORM_URL, "renderer": "kustomize"},
-	})
+	no_kustomization := object.union(good_input, {"context": {"platform_repo_url": PLATFORM_URL, "renderer": "kustomize"}})
 	violations := proposal.deny with input as no_kustomization
 	some v in violations
 	v.rule_id == "proposal.has_kustomization"
@@ -87,9 +85,7 @@ test_deny_when_kustomize_proposal_has_no_kustomization if {
 test_a_chart_does_not_satisfy_a_kustomize_application if {
 	# The bug this whole slice exists to close: a customer picks kustomize and
 	# receives a Helm chart. The chart must not buy its way past the gate.
-	chart_under_kustomize := object.union(good_input, {
-		"context": {"platform_repo_url": PLATFORM_URL, "renderer": "kustomize"},
-	})
+	chart_under_kustomize := object.union(good_input, {"context": {"platform_repo_url": PLATFORM_URL, "renderer": "kustomize"}})
 	violations := proposal.deny with input as chart_under_kustomize
 	rule_ids := {v.rule_id | some v in violations}
 	"proposal.has_kustomization" in rule_ids
@@ -147,6 +143,7 @@ test_deny_when_artifact_path_is_absolute if {
 	]})})
 	violations := proposal.deny with input as bad
 	rule_ids := {v.rule_id | some v in violations}
+
 	# Both rules fire: allowed_paths AND no_path_traversal.
 	"proposal.no_path_traversal" in rule_ids
 }
@@ -184,6 +181,42 @@ test_multiple_rules_can_fire_at_once if {
 	}
 	violations := proposal.deny with input as really_bad
 	rule_ids := {v.rule_id | some v in violations}
+
 	# allowed_paths (Makefile), has_workflow, has_helm_chart, repoURL_is_canonical
 	count(rule_ids) >= 4
+}
+
+# ---- rule 1b: the Stack file, only for a declaring scoped fix --------------
+
+_with_stack_file := object.union(good_input, {"proposal": object.union(good_input.proposal, {"files": array.concat(
+	good_input.proposal.files,
+	[{"path": "environment-profile.yaml", "content": "schema_version: \"1\"\nname: acme\n"}],
+)})})
+
+test_deny_when_a_proposal_writes_the_stack_file if {
+	violations := proposal.deny with input as _with_stack_file
+	some v in violations
+	v.rule_id == "proposal.allowed_paths"
+}
+
+test_allow_the_stack_file_for_a_declaring_scoped_fix if {
+	declaring := object.union(_with_stack_file, {"context": object.union(
+		_with_stack_file.context,
+		{"remediation": {"declares_profile": true}},
+	)})
+	violations := proposal.deny with input as declaring
+	count({v | some v in violations; v.rule_id == "proposal.allowed_paths"}) == 0
+}
+
+test_deny_a_nested_stack_file_even_for_a_declaring_fix if {
+	nested := object.union(good_input, {
+		"proposal": object.union(good_input.proposal, {"files": array.concat(
+			good_input.proposal.files,
+			[{"path": "gitops2/environment-profile.yaml", "content": "x: 1\n"}],
+		)}),
+		"context": object.union(good_input.context, {"remediation": {"declares_profile": true}}),
+	})
+	violations := proposal.deny with input as nested
+	some v in violations
+	v.rule_id == "proposal.allowed_paths"
 }
