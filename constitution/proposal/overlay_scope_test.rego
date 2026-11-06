@@ -168,6 +168,24 @@ test_repo_audit_skips_kind_scoped_rule if {
 	not _fires(_k8s_only, _repo_audit_input)
 }
 
+# ---- scoped fixes (#844) -------------------------------------------------
+
+_remediation_input(tier) := object.union(good_input, {"context": object.union(
+	good_input.context,
+	{
+		"target": {"name": "c", "tier": tier, "kind": "kubernetes"},
+		"remediation": {"declares_profile": true, "category": "sast", "tool": "semgrep"},
+	},
+)})
+
+test_remediation_context_neither_widens_nor_narrows_scope if {
+	# The Stack-file exception is for allowed_paths only: a scoped fix is
+	# judged by an overlay rule's scope exactly like any other proposal.
+	_fires(_prod_only, _remediation_input("prod"))
+	not _fires(_prod_only, _remediation_input("dev"))
+	_fires(_anywhere, _remediation_input("dev"))
+}
+
 # ---- scope filters overlays only -----------------------------------------
 
 test_scope_filter_leaves_other_overlay_rules_alone if {
