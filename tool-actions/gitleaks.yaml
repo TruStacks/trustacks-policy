@@ -42,4 +42,11 @@ notes: |
   the name the action's README gives. Without it the action exits with
   "missing gitleaks license". A repo owned by a personal account needs none.
   Reference the secret only when the customer has it; never invent one.
+  In a reusable (called) workflow, storing the secret is not enough: a called
+  workflow sees only the secrets its caller passes. Either the calling job
+  sets `secrets: inherit` (callers in the same organization or enterprise;
+  the called workflow may then reference it undeclared), or it passes
+  `secrets: { GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }} }` and the
+  called workflow declares `GITLEAKS_LICENSE` under
+  `on.workflow_call.secrets`. Say which in the PR body's caller snippet.
 last_verified: "2026-11-06"
