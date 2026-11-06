@@ -32,7 +32,14 @@ rule_metadata["practice.argocd_prod_requires_manual_sync"] := {
 	"practice_dimensions": ["manual_promotion_to_prod"],
 	"tier_scope": ["prod"],
 	"target_kinds": ["kubernetes"],
+	"deliveries": ["gitops"],
 }
+
+# `deliveries` says where the practice is judged by this rule: a push target
+# (ADR-0069) has no ArgoCD sync to gate, and its prod gate is the PR review.
+# The body is deliberately not guarded on delivery: it only fires on an ArgoCD
+# Application with automated sync, and one turning up in a push proposal is
+# still worth refusing — the stricter reading, as for name vs tier below.
 
 deny contains msg if {
 	some f in input.proposal.files
