@@ -58,6 +58,14 @@ Twenty-four `rule_id`s ship today, in four families. Rules that apply to
 only one deployment-target kind say so in `rule_metadata.target_kinds`
 (`kubernetes` or `ecs-fargate`); a target with no kind is Kubernetes.
 
+A customer overlay rule's `tier_scope` and `target_kinds` are enforced: the
+aggregator in `proposal/lib.rego` keeps an overlay deny only when the
+proposal's target is inside the scope its rule declares. A missing or invalid
+scope reads as `any`, so a rule is never narrowed by accident, and a repo
+audit (no deployment target) runs only rules scoped `any` on both. The
+constitution's own rules check tier and kind in their rego; their metadata
+describes them and is not used as a filter.
+
 - **`proposal.*`** — shape and safety of the change itself: `allowed_paths`,
   `no_path_traversal`, `has_workflow`, `has_helm_chart`, `has_kustomization`,
   `has_argocd_application`, and for ECS Fargate targets
