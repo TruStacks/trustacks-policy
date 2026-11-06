@@ -23,6 +23,21 @@ so emitting an unpinned action would be us failing our own gate.
 | `gitleaks.yaml` | secret detection |
 | `syft.yaml` | SBOM generation |
 | `cosign.yaml` | artifact signing |
+| `codeql-upload-sarif.yaml` | uploads a scanner's SARIF to GitHub code scanning (rides along with `trivy`/`semgrep`; non-fatal, since code scanning needs a public repo or GitHub Advanced Security) |
+| `upload-artifact.yaml` | keeps that SARIF as a workflow artifact, so results survive where code scanning isn't available |
+
+## Token permissions
+
+A pack's `permissions:` lists the `GITHUB_TOKEN` permissions the job running
+its step must grant (gitleaks lists a PR's commits, so `pull-requests: read`;
+the SARIF upload needs `security-events: write` and `actions: read`). A job
+with an explicit `permissions:` block must include them; the product refuses
+one that doesn't. A job with no block inherits the calling job's grant and is
+left that way, because adding a block would replace the grant and drop every
+other scope it carries. So the service repo's calling job must grant the
+union of every job's permissions plus what inheriting jobs' tool steps need:
+a called workflow can only keep or reduce its caller's token, and GitHub
+refuses a run whose job asks for more.
 
 ## The honest limit
 
