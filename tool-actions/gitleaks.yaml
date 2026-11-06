@@ -17,11 +17,27 @@ profile_categories:
 action: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
 action_version_label: v3.0.0
 inputs: {}
+# Verified 2026-11-06 against src/gitleaks.js at the pinned commit: on a
+# pull_request event the action calls GET /repos/{o}/{r}/pulls/{n}/commits
+# outside any try, so a job whose token can't read pull requests fails with
+# "Resource not accessible by integration" (403, x-accepted-github-permissions:
+# pull_requests=read). Seen on the dogfood service repo, 2026-11-06.
+permissions:
+  contents: read
+  pull-requests: read
 notes: |
-  Requires `GITHUB_TOKEN` (provided automatically by GitHub Actions).
-  The free tier blocks scanning private repos without a Gitleaks
-  Cloud license — the action surfaces a clear error if invoked on a
-  private repo without `GITLEAKS_LICENSE` set. For the Beta target
-  customer (regulated mid-market with private repos), the customer
-  needs a Gitleaks license configured as a repo secret.
-last_verified: "2026-11-02"
+  Pass `env: { GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} }` (the token GitHub
+  Actions provides; no customer secret). Give the job running this step
+  `permissions: { contents: read, pull-requests: read }`: on a pull request the
+  action lists the PR's commits, and without `pull-requests: read` it fails
+  with a 403. It also tries to leave review comments on leaked lines; that
+  needs `pull-requests: write`, and without it the action logs a warning and
+  carries on (the findings still reach the job summary and artifact). Grant
+  write only if the customer wants the inline comments.
+  A repo owned by a GitHub organization also needs a Gitleaks license (free
+  from gitleaks.io), stored as a repo or org secret and passed as
+  `GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}` in the same `env:`,
+  the name the action's README gives. Without it the action exits with
+  "missing gitleaks license". A repo owned by a personal account needs none.
+  Reference the secret only when the customer has it; never invent one.
+last_verified: "2026-11-06"

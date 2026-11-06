@@ -23,6 +23,18 @@ so emitting an unpinned action would be us failing our own gate.
 | `gitleaks.yaml` | secret detection |
 | `syft.yaml` | SBOM generation |
 | `cosign.yaml` | artifact signing |
+| `codeql-upload-sarif.yaml` | uploads a scanner's SARIF to GitHub code scanning (rides along with `trivy`/`semgrep`; non-fatal, since code scanning needs a public repo or GitHub Advanced Security) |
+| `upload-artifact.yaml` | keeps that SARIF as a workflow artifact, so results survive where code scanning isn't available |
+
+## Token permissions
+
+A pack's `permissions:` lists the `GITHUB_TOKEN` permissions the job running
+its step must grant (gitleaks lists a PR's commits, so `pull-requests: read`;
+the SARIF upload needs `security-events: write` and `actions: read`). The
+product refuses a workflow whose tool step's job lacks them, and a service
+repo calling the workflow must grant the union of every job's permissions:
+a called workflow can only keep or reduce its caller's token, so GitHub
+refuses a run whose job asks for more.
 
 ## The honest limit
 

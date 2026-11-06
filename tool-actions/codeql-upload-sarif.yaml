@@ -16,12 +16,23 @@ profile_categories: []
 action: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee
 action_version_label: v4.39.0
 inputs: {}
+# docs.github.com, "Uploading a SARIF file to GitHub": `security-events: write`
+# is required for all workflows and `actions: read` for workflows in private
+# repositories; the example grants `contents: read` alongside.
+permissions:
+  actions: read
+  contents: read
+  security-events: write
 notes: |
   Emit immediately after the scan step, with `if: always()` so a scan that
-  fails the job on findings still uploads them, and
-  `with: { sarif_file: <the scanner's sarif_output>, category: <tool_name> }`.
-  The job needs `permissions: { contents: read, security-events: write }`.
-  Code scanning must be available on the repo (public repos, or GitHub
-  Advanced Security on private ones); otherwise the upload step fails with a
-  clear error and nothing else changes.
-last_verified: "2026-10-20"
+  fails the job on findings still uploads them, `continue-on-error: true`,
+  and `with: { sarif_file: <the scanner's sarif_output>, category: <tool_name> }`.
+  The job needs `permissions: { actions: read, contents: read,
+  security-events: write }`.
+  Code scanning shows results only on public repos, or on private and
+  internal repos with GitHub Advanced Security (GitHub Code Security)
+  enabled. Anywhere else this upload always fails, which is why it is
+  non-fatal: it must never fail the customer's build. The SARIF is also kept
+  as a workflow artifact (the `upload-artifact` pack), so the results are
+  never lost either way.
+last_verified: "2026-11-06"

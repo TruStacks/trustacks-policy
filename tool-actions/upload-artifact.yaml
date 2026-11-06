@@ -1,0 +1,30 @@
+# GitHub Actions artifact upload — keeps a scanner's SARIF
+#
+# Not a Profile tool. It rides along with the SARIF upload
+# (`codeql-upload-sarif`): GitHub code scanning only accepts that upload on
+# public repos or with GitHub Advanced Security, so on any other private repo
+# the scan results would be lost. Uploading the same file as a workflow
+# artifact keeps them on the run's summary page whatever the repo's plan.
+#
+# Marketplace: https://github.com/actions/upload-artifact
+# Verified 2026-11-06: tag v7.0.2 -> commit cf430e03… (lightweight tag), and
+# action.yml at that commit declares `runs.using: node24`. The same pin
+# trustacks-mvp's own CI uses.
+
+tool_name: upload-artifact
+display_name: Workflow artifact upload (actions/upload-artifact)
+profile_categories: []
+action: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+action_version_label: v7.0.2
+inputs:
+  if-no-files-found: warn
+# Artifacts are written with the runner's own Actions runtime token, not
+# GITHUB_TOKEN, so the job needs no permission for this step.
+permissions: {}
+notes: |
+  Emit right after the SARIF upload step, with `if: always()` so a scan that
+  failed the job on findings still keeps them, and
+  `with: { name: <tool_name>-sarif, path: <the scanner's sarif_output>,
+  if-no-files-found: warn }`. Artifact names must be unique within a run,
+  hence the tool name in it.
+last_verified: "2026-11-06"

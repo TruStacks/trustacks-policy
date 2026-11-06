@@ -26,7 +26,12 @@ the marketplace and update if a newer release is preferred.
    `action_version_label:` in the pack YAML. Set `last_verified:` to
    today's ISO-8601 date.
 5. If the action's documented inputs have changed, update the `inputs:`
-   block to match.
+   block to match. Re-check the `GITHUB_TOKEN` permissions it needs, from
+   its README and the API calls in its source at the new SHA, and set
+   `permissions:` to them (e.g. gitleaks lists a PR's commits, so
+   `pull-requests: read`). The DevOps Engineer refuses a workflow whose tool
+   step's job doesn't grant them, and the service repo's caller must grant
+   their union, so a missing entry is a run GitHub rejects.
 6. Open a PR. CI parses every pack in this directory, so a
    format-broken SHA fails the build rather than reaching a customer's
    pipeline. (The loader's own unit tests live in the TruStacks product

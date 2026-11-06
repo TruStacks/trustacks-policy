@@ -43,6 +43,9 @@ REVIEWED: dict[str, dict[str, str]] = {
     "docker/build-push-action": {"f9f3042f7e2789586610d6e8b85c8f03e5195baf": "v7.2.0"},
     "gitleaks/gitleaks-action": {"e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e": "v3.0.0"},
     "anchore/sbom-action": {"66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c": "v0.24.3"},
+    # Resolved 2026-11-06 (lightweight tag); keeps SARIF where code scanning
+    # isn't available. The same pin trustacks-mvp's own CI uses.
+    "actions/upload-artifact": {"cf430e030ddbb5b0abf93d22962f4752f3646cd9": "v7.0.2"},
     "github/codeql-action/upload-sarif": {
         "6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee": "v4.39.0",
     },
