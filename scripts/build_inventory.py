@@ -13,7 +13,8 @@ output shape is a contract with the runner's reader — keep it identical:
 
     {"<label>_inventory": [ {rule_id, package, description,
                              required_tooling_categories, practice_dimensions,
-                             tier_scope, kind, rego_body, source}, ... ]}
+                             tier_scope, kind, rego_body, source,
+                             target_kinds, deliveries, subjects}, ... ]}
 
 Each rule is attributed to the file that declares it, and its ``rego_body``
 is that file's source. A file that does not compile alone — a rule calling a
@@ -161,6 +162,13 @@ def harvest(
                 "kind": derive_kind(str(rule_id), practice),
                 "rego_body": body,
                 "source": label,
+                # The scope fields (mvp ADR-0065 §1, ADR-0067, ADR-0069), with
+                # the reader's defaults for a rule that declares none. Left
+                # out, the runner reads every rule as applying to any target
+                # kind and any delivery, and the Rules page says so.
+                "target_kinds": _strings(meta.get("target_kinds", ["any"])) or ["any"],
+                "deliveries": _strings(meta.get("deliveries", ["any"])) or ["any"],
+                "subjects": _strings(meta.get("subjects", ["proposal"])) or ["proposal"],
             }
         )
     return entries
