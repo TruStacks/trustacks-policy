@@ -13,7 +13,7 @@ package proposal
 import rego.v1
 
 rule_metadata["proposal.allowed_paths"] := {
-	"description": "Every artifact path lives under gitops/, argo-apps/, or the CI runtime's pipeline location (.github/workflows/, azure-pipelines.yml / azure-pipelines/, or .gitlab/ci/).",
+	"description": "Every artifact path lives under gitops/, argo-apps/, or the CI runtime's pipeline location (.github/workflows/, azure-pipelines.yml / azure-pipelines/, or .gitlab/ci/). environment-profile.yaml only for a scoped fix declaring the tool the customer chose.",
 	"required_tooling_categories": [],
 	"practice_dimensions": [],
 	"tier_scope": ["any"],
@@ -40,6 +40,20 @@ is_allowed_path(path) if {
 is_allowed_path(path) if {
 	some file in object.get(_runtime_pipeline_files, ci_runtime, [])
 	path == file
+}
+
+# The Stack file, for one kind of proposal only: a scoped fix whose tool the
+# customer chose in TruStacks, which declares that tool in the same PR that
+# adds its step (2026-11-05). The runner authors that edit itself — never the
+# agent — and refuses anything but the one addition; it says so here with
+# `input.context.remediation.declares_profile`. Every other proposal is still
+# denied for touching it: declaring a tool is the customer's statement, and only
+# their explicit choice makes it one.
+stack_file := "environment-profile.yaml"
+
+is_allowed_path(path) if {
+	path == stack_file
+	input.context.remediation.declares_profile == true
 }
 
 # Fail closed on a CI runtime the constitution doesn't know: deny, naming it,
