@@ -27,8 +27,9 @@ notes: |
   Emit immediately after the scan step, with `if: always()` so a scan that
   fails the job on findings still uploads them, `continue-on-error: true`,
   and `with: { sarif_file: <the scanner's sarif_output>, category: <tool_name> }`.
-  The job needs `permissions: { actions: read, contents: read,
-  security-events: write }`.
+  The step needs `actions: read, contents: read, security-events: write`: in
+  the job's `permissions:` block if it has one, else from the calling job
+  (never add a block to a job that has none).
   Code scanning shows results only on public repos, or on private and
   internal repos with GitHub Advanced Security (GitHub Code Security)
   enabled. Anywhere else this upload always fails, which is why it is

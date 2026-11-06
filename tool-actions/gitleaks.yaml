@@ -27,10 +27,12 @@ permissions:
   pull-requests: read
 notes: |
   Pass `env: { GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} }` (the token GitHub
-  Actions provides; no customer secret). Give the job running this step
-  `permissions: { contents: read, pull-requests: read }`: on a pull request the
-  action lists the PR's commits, and without `pull-requests: read` it fails
-  with a 403. It also tries to leave review comments on leaked lines; that
+  Actions provides; no customer secret). The step needs
+  `contents: read, pull-requests: read`: on a pull request the action lists
+  the PR's commits, and without `pull-requests: read` it fails with a 403. If
+  the job has a `permissions:` block, add them to it; if it has none, leave
+  it without one (it inherits the calling job's grant, and a block would drop
+  the rest of it), and the calling job must grant them. It also tries to leave review comments on leaked lines; that
   needs `pull-requests: write`, and without it the action logs a warning and
   carries on (the findings still reach the job summary and artifact). Grant
   write only if the customer wants the inline comments.
