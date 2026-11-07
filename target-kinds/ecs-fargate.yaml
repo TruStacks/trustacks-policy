@@ -156,19 +156,42 @@ deploy_workflow:
           id-token: write
         env:
           SERVICE_ROOT: "@@service_root@@"
+          # What this target deploys from. A run whose target changed on main
+          # after its commit is refused: that change's own run deploys it.
+          DEPLOY_PATHS: "@@service_root@@/task-definition.json @@service_root@@/deploy-target.json .github/workflows/@@workflow_name@@.yaml"
         steps:
           - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
             with:
               persist-credentials: false
-          - name: Refuse to deploy anything but the head of main
+          # Not "refuse unless this is the head of main": in a shared platform
+          # repo a merge to another service would drop this deploy, and nothing
+          # would retry it. Refused only when this commit is not on main, or
+          # main has since changed what this target deploys from.
+          - name: Refuse unless main still deploys this commit's target
+            shell: bash
             env:
               GH_TOKEN: ${{ github.token }}
             run: |
-              head="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
-              if [ "$head" != "$GITHUB_SHA" ]; then
-                echo "::error::${GITHUB_SHA} is not the head of main (${head}). Roll back by reverting in Git, not by re-running an old deploy."
+              head="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+              [ "$head" = "$GITHUB_SHA" ] && exit 0
+              cmp="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${GITHUB_SHA}...${head}")"
+              if [ "$(jq -r .status <<<"$cmp")" != "ahead" ]; then
+                echo "::error::${GITHUB_SHA} is not on main (${head}). Roll back by reverting in Git, not by re-running an old deploy."
                 exit 1
               fi
+              if [ "$(jq '.files | length' <<<"$cmp")" -ge 300 ]; then
+                echo "::error::main moved too far since ${GITHUB_SHA} to prove this target is unchanged. Run this workflow from main with workflow_dispatch."
+                exit 1
+              fi
+              while read -r changed; do
+                for p in $DEPLOY_PATHS; do
+                  case "$changed" in "$p"*)
+                    echo "::error::main moved to ${head} and changed ${changed}; that commit's own run deploys it. Nothing was applied."
+                    exit 1 ;;
+                  esac
+                done
+              done < <(jq -r '.files[] | .filename, (.previous_filename // empty)' <<<"$cmp")
+              echo "::notice::main moved to ${head}, but nothing this target deploys changed; deploying ${GITHUB_SHA}."
           - name: Read this target's binding
             id: target
             run: |
