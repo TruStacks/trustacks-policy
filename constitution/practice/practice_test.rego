@@ -555,15 +555,42 @@ test_github_job_and_service_containers_by_digest_pass if {
 	])) == 0
 }
 
-test_github_job_container_from_an_expression_is_left_to_the_caller if {
-	# A reusable workflow takes its image as an input; the pin lives in the
-	# caller, which is judged in its own file. Same as dockerfile_runs_as_nonroot.
+test_github_job_container_from_a_workflow_input_is_left_to_the_caller if {
+	# A reusable workflow's image is its caller's input; the caller is judged
+	# in its own file.
 	count(_container_denials([
 		"    container: ${{ inputs.image }}",
 		"    services:",
 		"      db:",
-		"        image: postgres:${{ matrix.pg }}",
+		"        image: ${{ inputs.db_image }}",
 	])) == 0
+}
+
+test_github_container_tag_from_a_matrix_is_denied if {
+	# CodeRabbit on #878: `postgres:${{ matrix.pg }}` resolves to a tag in this
+	# very workflow, and no caller ever judges it.
+	some msg in _container_denials(["    services:", "      db:", "        image: postgres:${{ matrix.pg }}"])
+	contains(msg, "expression")
+}
+
+test_github_container_from_a_matrix_with_a_literal_digest_passes if {
+	count(_container_denials([sprintf("    container: ghcr.io/acme/${{ matrix.svc }}@%s", [_digest])])) == 0
+}
+
+test_github_blank_image_in_the_model_is_no_container if {
+	# An older runner can send "" for `container: {image: ''}`.
+	model := object.union(good_input, {"proposal": object.union(good_input.proposal, {"pipelines": [{
+		"path": ".github/workflows/ci.yaml",
+		"runtime": "github_actions",
+		"extends": null,
+		"jobs": [{"name": "test", "kind": "job", "image": "", "services": ["  "], "steps": []}],
+	}]})})
+	not _pin_denied_in(model)
+}
+
+_pin_denied_in(input_doc) if {
+	some v in proposal.deny with input as input_doc
+	v.rule_id == "practice.workflow_pins_action_versions"
 }
 
 test_github_empty_container_image_is_no_container if {
