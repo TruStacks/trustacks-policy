@@ -71,7 +71,9 @@ _github_model_job(name, job) := {
 	"environment": _github_environment_name(job),
 	"image": _github_container_image(object.get(job, "container", null)),
 	"services": [image |
-		some svc in object.get(job, "services", {})
+		services := object.get(job, "services", {})
+		is_object(services)
+		some svc in services
 		image := _github_container_image(svc)
 		is_string(image)
 	],
@@ -85,6 +87,7 @@ _github_container_image(c) := c if {
 } else := c.image if {
 	is_object(c)
 	is_string(c.image)
+	trim_space(c.image) != ""
 } else := null
 
 _github_model_step(step) := object.union(_github_run(step), _github_uses(step))

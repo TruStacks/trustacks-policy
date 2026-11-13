@@ -555,6 +555,28 @@ test_github_job_and_service_containers_by_digest_pass if {
 	])) == 0
 }
 
+test_github_job_container_from_an_expression_is_left_to_the_caller if {
+	# A reusable workflow takes its image as an input; the pin lives in the
+	# caller, which is judged in its own file. Same as dockerfile_runs_as_nonroot.
+	count(_container_denials([
+		"    container: ${{ inputs.image }}",
+		"    services:",
+		"      db:",
+		"        image: postgres:${{ matrix.pg }}",
+	])) == 0
+}
+
+test_github_empty_container_image_is_no_container if {
+	# `image: ''` is GitHub's conditional-container idiom: no container at all.
+	count(_container_denials(["    container:", "      image: ''"])) == 0
+}
+
+test_github_services_as_a_list_is_not_read if {
+	# GitHub rejects the syntax; the runner's model reads nothing, so neither
+	# does the fallback.
+	count(_container_denials(["    services:", "      - redis:7"])) == 0
+}
+
 test_github_job_container_from_the_model_is_judged if {
 	# The runner sends the normalised model; the rule reads `job.image` from it.
 	model := object.union(good_input, {"proposal": object.union(good_input.proposal, {"pipelines": [{

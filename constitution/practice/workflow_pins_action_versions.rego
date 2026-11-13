@@ -105,14 +105,22 @@ deny contains msg if {
 	}
 }
 
+# An image that is (or contains) a `${{ … }}` expression is skipped: in a
+# reusable workflow the image is the caller's input, and the caller is judged
+# in its own file. Same stance as dockerfile_runs_as_nonroot on `$` values.
 _github_job_images(p) := {image |
 	some job in p.jobs
 	image := job.image
-	is_string(image)
+	_judgeable_image(image)
 } | {image |
 	some job in p.jobs
 	some image in object.get(job, "services", [])
+	_judgeable_image(image)
+}
+
+_judgeable_image(image) if {
 	is_string(image)
+	not contains(image, "${{")
 }
 
 # Azure Pipelines: a task step names a full version.
