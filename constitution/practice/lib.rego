@@ -69,8 +69,26 @@ _github_model_job(name, job) := {
 	"name": name,
 	"kind": "job",
 	"environment": _github_environment_name(job),
-	"steps": [_github_model_step(step) | some step in job.steps],
+	"image": _github_container_image(object.get(job, "container", null)),
+	"services": [image |
+		services := object.get(job, "services", {})
+		is_object(services)
+		some svc in services
+		image := _github_container_image(svc)
+		is_string(image)
+	],
+	"steps": [_github_model_step(step) | some step in object.get(job, "steps", [])],
 }
+
+# `container:` and each `services:` entry: an image string, or a mapping's `image`.
+_github_container_image(c) := c if {
+	is_string(c)
+	trim_space(c) != ""
+} else := c.image if {
+	is_object(c)
+	is_string(c.image)
+	trim_space(c.image) != ""
+} else := null
 
 _github_model_step(step) := object.union(_github_run(step), _github_uses(step))
 
