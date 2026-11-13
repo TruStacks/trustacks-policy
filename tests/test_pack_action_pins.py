@@ -84,8 +84,11 @@ _IMAGE = re.compile(
 
 
 def _is_local(ref: str) -> bool:
-    """Local actions and container images are not pinned by commit SHA."""
-    return ref.startswith(("./", "docker://"))
+    """Local actions are this repo's own code, not pinned by commit SHA.
+
+    Container steps (`docker://`) are references: they must carry a reviewed
+    digest (`REVIEWED_IMAGES`), so a tagged image in a template fails."""
+    return ref.startswith("./")
 
 
 def action_refs(text: str, action_field: str | None = None) -> list[str]:
@@ -172,7 +175,13 @@ def test_a_tag_branch_or_unreviewed_ref_fails(text: str) -> None:
 
 
 def test_local_actions_are_not_references() -> None:
-    assert action_refs("- uses: ./.github/actions/x\n- uses: docker://alpine:3\n") == []
+    assert action_refs("- uses: ./.github/actions/x\n") == []
+
+
+def test_a_container_step_in_a_template_is_a_reference() -> None:
+    refs = action_refs("- uses: docker://alpine:3\n")
+    assert refs == ["docker://alpine:3"]
+    assert unreviewed(refs) == refs
 
 
 @pytest.mark.parametrize(
