@@ -458,6 +458,50 @@ test_practice_workflow_pins_action_versions_branch_name_gets_tag_message if {
 	contains(v.message, "should pin to a SHA, not a tag")
 }
 
+# #828: a container step (`uses: docker://…`) is pinned by image digest, the
+# strongest pin there is; it has no commit to name.
+_with_uses(ref) := object.union(good_input, {"proposal": object.union(good_input.proposal, {"files": [
+	{"path": ".github/workflows/ci.yaml", "content": concat("\n", [
+		"name: ci",
+		"on: [push]",
+		"jobs:",
+		"  test:",
+		"    runs-on: ubuntu-latest",
+		"    steps:",
+		"      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11",
+		sprintf("      - uses: %s", [ref]),
+		"      - run: pytest -q && ruff check .",
+		"",
+	])},
+	good_input.proposal.files[1],
+	good_input.proposal.files[2],
+]})})
+
+_pin_denials(ref) := {v.message |
+	some v in proposal.deny with input as _with_uses(ref)
+	v.rule_id == "practice.workflow_pins_action_versions"
+}
+
+test_practice_workflow_pins_action_versions_allows_a_digest_pinned_container if {
+	count(_pin_denials("docker://semgrep/semgrep:1.185.0@sha256:67518c174185a2043fdbed16c70631b79209499b3671178e7194379b48295a0d")) == 0
+	count(_pin_denials("docker://ghcr.io/acme/scan@sha256:67518c174185a2043fdbed16c70631b79209499b3671178e7194379b48295a0d")) == 0
+}
+
+test_practice_workflow_pins_action_versions_denies_a_container_by_tag if {
+	some msg in _pin_denials("docker://semgrep/semgrep:1.185.0")
+	contains(msg, "should be pinned by digest")
+}
+
+test_practice_workflow_pins_action_versions_denies_a_container_with_no_tag if {
+	some msg in _pin_denials("docker://alpine")
+	contains(msg, "should be pinned by digest")
+}
+
+test_practice_workflow_pins_action_versions_denies_a_short_container_digest if {
+	some msg in _pin_denials("docker://alpine@sha256:67518c17")
+	contains(msg, "should be pinned by digest")
+}
+
 # #696: the final stage's last USER decides, and `:group` is not part of the user.
 _with_dockerfile(content) := object.union(good_input, {"proposal": object.union(good_input.proposal, {"files": [
 	good_input.proposal.files[0],
