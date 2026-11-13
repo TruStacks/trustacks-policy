@@ -11,7 +11,8 @@
 #
 # A container step (`uses: docker://image…`) has no commit to name: it is pinned
 # by image digest (`@sha256:` and 64 hex), the same bar as Azure and GitLab
-# images below, and denied by tag or with no tag at all (#828).
+# images below, and denied by tag or with no tag at all (#828). So is a job's
+# `container:` and every `services:` image (#875).
 #
 # Pinning is per runtime (ADR-0071 §2, §4), read from the neutral pipeline
 # model. GitHub Actions: the SHA rule above. Azure Pipelines: a task can't be
@@ -87,6 +88,31 @@ deny contains msg if {
 			[p.path, step.uses],
 		),
 	}
+}
+
+# GitHub Actions: a job's container and service images are pinned by digest.
+deny contains msg if {
+	some p in _pinned_pipelines
+	p.runtime == "github_actions"
+	some image in _github_job_images(p)
+	not regex.match(`@sha256:[0-9a-f]{64}$`, image)
+	msg := {
+		"rule_id": "practice.workflow_pins_action_versions",
+		"message": sprintf(
+			"workflow %v: container `%v` should be pinned by digest (image@sha256:...), not a tag",
+			[p.path, image],
+		),
+	}
+}
+
+_github_job_images(p) := {image |
+	some job in p.jobs
+	image := job.image
+	is_string(image)
+} | {image |
+	some job in p.jobs
+	some image in object.get(job, "services", [])
+	is_string(image)
 }
 
 # Azure Pipelines: a task step names a full version.
