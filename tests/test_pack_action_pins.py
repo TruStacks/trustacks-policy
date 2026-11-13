@@ -60,11 +60,17 @@ REVIEWED: dict[str, dict[str, str]] = {
     "aquasecurity/trivy-action": {"ed142fd0673e97e23eac54620cfb913e5ce36c25": "v0.36.0"},
 }
 
-#: Pins that do not resolve and have no fix in this table. `semgrep/semgrep`
-#: is not a GitHub Action (its repo has no action.yml); the pack needs a
-#: redesign (container image + `semgrep ci`), not a new SHA (trustacks-mvp#828).
-#: Listed so the gap is visible rather than passing as reviewed.
-UNRESOLVED = {"semgrep/semgrep@b6c8e8b4f9e8b4a5e8b4f9e8b4a5e8b4f9e8b4a5"}
+#: Container steps (`docker://image:tag@sha256:<digest>`): image -> {digest:
+#: tag}. A tool that ships no GitHub Action runs from its image (#828: the
+#: semgrep pack pinned `semgrep/semgrep@<sha>`, which named no commit and is not
+#: an action). The digest is the multi-arch index digest of the tag, resolved
+#: from the registry, and the ref must carry that same tag.
+REVIEWED_IMAGES: dict[str, dict[str, str]] = {
+    # Resolved 2026-11-13 from Docker Hub (index: linux/amd64 + linux/arm64).
+    "semgrep/semgrep": {
+        "sha256:67518c174185a2043fdbed16c70631b79209499b3671178e7194379b48295a0d": "1.185.0",
+    },
+}
 
 #: Every `uses:` value, whatever its ref looks like: a tag, a branch, a short
 #: SHA and a full SHA are all found, so a ref that is not a reviewed SHA fails
@@ -72,6 +78,9 @@ UNRESOLVED = {"semgrep/semgrep@b6c8e8b4f9e8b4a5e8b4f9e8b4a5e8b4f9e8b4a5"}
 #: the agent copies both.
 _USES = re.compile(r"""uses:\s*['"]?(?P<ref>[^\s#'"]+)['"]?(?P<rest>[^\n]*)""")
 _FULL_SHA = re.compile(r"^(?P<action>[\w.-]+/[\w./-]+)@(?P<sha>[0-9a-f]{40})$")
+_IMAGE = re.compile(
+    r"^docker://(?P<image>[\w./-]+):(?P<tag>[\w.-]+)@(?P<digest>sha256:[0-9a-f]{64})$"
+)
 
 
 def _is_local(ref: str) -> bool:
@@ -89,10 +98,16 @@ def action_refs(text: str, action_field: str | None = None) -> list[str]:
 
 
 def unreviewed(refs: list[str]) -> list[str]:
-    """The refs that are not exactly a reviewed 40-char SHA from the table."""
+    """The refs that are not exactly a reviewed 40-char SHA (or image digest) from the tables."""
     bad: list[str] = []
     for ref in refs:
-        if ref in UNRESOLVED:
+        if ref.startswith("docker://"):
+            img = _IMAGE.match(ref)
+            if (
+                img is None
+                or REVIEWED_IMAGES.get(img["image"], {}).get(img["digest"]) != img["tag"]
+            ):
+                bad.append(ref)
             continue
         m = _FULL_SHA.match(ref)
         if m is None or m["sha"] not in REVIEWED.get(m["action"], {}):
@@ -124,7 +139,7 @@ def test_every_action_reference_is_a_reviewed_sha(path: Path) -> None:
     refs = _refs_in(path)
     assert refs, f"{path.name}: no action reference found (premise)"
     bad = unreviewed(refs)
-    assert not bad, f"{path.name}: not a reviewed 40-char SHA from the table: {bad}"
+    assert not bad, f"{path.name}: not a reviewed SHA or image digest from the tables: {bad}"
 
 
 @pytest.mark.parametrize(
@@ -139,6 +154,10 @@ def test_every_action_reference_is_a_reviewed_sha(path: Path) -> None:
         "steps:\n  - uses: actions/checkout@" + "a" * 40 + "\n",
         # a reviewed SHA under another action's name
         "steps:\n  - uses: evil/action@de0fac2e4500dabe0009e67214ff5f5447ce83dd\n",
+        # a container by tag, and the reviewed digest under the wrong tag
+        "action: docker://semgrep/semgrep:1.185.0\n",
+        "action: docker://semgrep/semgrep:1.184.0@"
+        "sha256:67518c174185a2043fdbed16c70631b79209499b3671178e7194379b48295a0d\n",
     ],
 )
 def test_a_tag_branch_or_unreviewed_ref_fails(text: str) -> None:

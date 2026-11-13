@@ -2,7 +2,9 @@
 
 One YAML per security or supply-chain tool, mapping a tool a customer declares
 in their environment profile (`trivy`, `cosign`, `syft`, …) to its canonical
-GitHub Action **pinned to a commit SHA**.
+GitHub Action **pinned to a commit SHA**, or, for a tool that publishes no
+action (Semgrep), its container image **pinned by digest**
+(`docker://image:tag@sha256:…`).
 
 ## Why these exist
 

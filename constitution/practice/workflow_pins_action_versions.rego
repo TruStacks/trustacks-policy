@@ -9,6 +9,10 @@
 # `@v1.2.3`. Both paths emit the same rule_id so callers don't need
 # to handle two error codes.
 #
+# A container step (`uses: docker://image…`) has no commit to name: it is pinned
+# by image digest (`@sha256:` and 64 hex), the same bar as Azure and GitLab
+# images below, and denied by tag or with no tag at all (#828).
+#
 # Pinning is per runtime (ADR-0071 §2, §4), read from the neutral pipeline
 # model. GitHub Actions: the SHA rule above. Azure Pipelines: a task can't be
 # pinned to a commit (Marketplace tasks aren't git repositories), so a task
@@ -63,6 +67,24 @@ deny contains msg if {
 		"message": sprintf(
 			"workflow %v: third-party action `uses: %v` should pin to a SHA, not a tag",
 			[p.path, unpinned],
+		),
+	}
+}
+
+# GitHub Actions: a container step is pinned by digest.
+deny contains msg if {
+	some p in _pinned_pipelines
+	p.runtime == "github_actions"
+	some job in p.jobs
+	some step in job.steps
+	is_string(step.uses)
+	startswith(step.uses, "docker://")
+	not regex.match(`@sha256:[0-9a-f]{64}$`, step.uses)
+	msg := {
+		"rule_id": "practice.workflow_pins_action_versions",
+		"message": sprintf(
+			"workflow %v: container step `uses: %v` should be pinned by digest (docker://image@sha256:...), not a tag",
+			[p.path, step.uses],
 		),
 	}
 }
@@ -184,6 +206,7 @@ _unpinned_uses_refs(p) := {ref |
 	count(parts) == 2
 	owner_repo := parts[0]
 	ref := uses
+	not startswith(owner_repo, "docker://")
 	not startswith(owner_repo, "actions/")
 	not startswith(owner_repo, "./")
 	not regex.match("^[0-9a-f]{40}$", parts[1])
