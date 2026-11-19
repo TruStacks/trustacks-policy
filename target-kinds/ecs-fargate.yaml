@@ -185,10 +185,10 @@ deploy_workflow:
               fi
               while read -r changed; do
                 for p in $DEPLOY_PATHS; do
-                  case "$changed" in "$p"*)
+                  if [ "$changed" = "$p" ]; then
                     echo "::error::main moved to ${head} and changed ${changed}; that commit's own run deploys it. Nothing was applied."
-                    exit 1 ;;
-                  esac
+                    exit 1
+                  fi
                 done
               done < <(jq -r '.files[] | .filename, (.previous_filename // empty)' <<<"$cmp")
               echo "::notice::main moved to ${head}, but nothing this target deploys changed; deploying ${GITHUB_SHA}."
