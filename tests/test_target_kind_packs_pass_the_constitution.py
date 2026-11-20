@@ -99,6 +99,21 @@ def test_the_packs_deploy_action_is_the_one_the_constitution_recognises(pack_pat
     assert f'_ecs_deploy_action := "{pack["deploy_action"]}"' in lib
 
 
+def test_the_fargate_deploy_triggers_on_every_path_its_guard_watches() -> None:
+    """The guard refuses a run when main changed a DEPLOY_PATHS file, saying
+    that change's own run deploys it. A watched path with no push trigger
+    leaves the target undeployed until someone dispatches by hand."""
+    pack = yaml.safe_load((REPO_ROOT / "target-kinds" / "ecs-fargate.yaml").read_text())
+    workflow = yaml.safe_load(_render(pack["deploy_workflow"]["template"]))
+    triggers = workflow[True]["push"]["paths"]  # PyYAML reads the `on:` key as True
+    watched = workflow["jobs"]["deploy"]["env"]["DEPLOY_PATHS"].split()
+    assert sorted(triggers) == sorted(watched)
+    assert f".github/workflows/{TOKENS['workflow_name']}.yaml" in triggers
+    assert pack["deploy_workflow"]["path_template"].format(
+        service=TOKENS["service"], cluster=TOKENS["cluster"]
+    ) == f".github/workflows/{TOKENS['workflow_name']}.yaml"
+
+
 @pytest.mark.parametrize(
     ("mutate", "rule_id"),
     [
