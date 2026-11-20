@@ -1,27 +1,57 @@
 # Semgrep — SAST / SCA
 #
 # Profile category: sast_sca
-# Marketplace: https://github.com/marketplace/actions/semgrep
+# Image: https://hub.docker.com/r/semgrep/semgrep
 #
-# Semgrep publishes their canonical action. The `semgrep ci` invocation
-# auto-detects the language + selects appropriate rule packs. Outputs
-# SARIF for upload to GitHub's code-scanning view.
+# Semgrep publishes no GitHub Action (the semgrep/semgrep repo has no
+# action.yml); its documented CI integration is the container image. So this
+# pack is a container step, pinned by the multi-arch index digest of the
+# 1.185.0 tag (resolved 2026-11-13 from Docker Hub; amd64 and arm64). The
+# previous pin, `semgrep/semgrep@b6c8e8b4…`, named no commit and could never
+# run (#828).
+#
+# `semgrep scan`, not `semgrep ci`: without a Semgrep AppSec Platform token,
+# `semgrep ci` prints "run `semgrep login`", scans nothing and exits 0, which
+# is a scanner that always passes. Verified against this image 2026-11-13.
 
 tool_name: semgrep
-display_name: Semgrep (semgrep/semgrep)
+display_name: Semgrep (semgrep/semgrep container)
 profile_categories:
   - sast_sca
-action: semgrep/semgrep@b6c8e8b4f9e8b4a5e8b4f9e8b4a5e8b4f9e8b4a5
-action_version_label: v1.95.0
+action: docker://semgrep/semgrep:1.185.0@sha256:67518c174185a2043fdbed16c70631b79209499b3671178e7194379b48295a0d
+action_version_label: 1.185.0
 inputs:
-  config: auto
-  output_format: sarif
-  output_destination: semgrep.sarif
+  args: semgrep scan --config p/default --severity ERROR --error --metrics off --sarif-output=semgrep.sarif .
 sarif_output: semgrep.sarif
 notes: |
-  `config: auto` selects Semgrep's curated registry rules matching the
-  detected languages. Customers who need org-specific rule packs
-  override `config:` with a path to a checked-in `.semgrep.yml` or a
-  Semgrep Cloud rule-pack URL. SARIF output uploads cleanly via
-  `github/codeql-action/upload-sarif`.
-last_verified: "2026-05-05"
+  A container step: the step uses the image above, and `with: args:` is the
+  whole command (the image has no entrypoint; `args` is split into words with
+  no shell, so no pipes or variables). It needs Docker on the runner:
+  GitHub-hosted Linux runners have it; a self-hosted runner without a Docker
+  daemon (for example ARC in Kubernetes mode) cannot run it. The step runs as
+  root, so `semgrep.sarif` is root-owned: harmless on a GitHub-hosted runner,
+  but on a persistent self-hosted runner it can stop the next job's checkout
+  cleaning the workspace.
+  `--config p/default` is Semgrep's curated default ruleset, fetched from the
+  Semgrep registry at run time, so the job needs outbound HTTPS to
+  semgrep.dev; a registry or network failure exits 2 and fails the step.
+  `--metrics off` keeps Semgrep from sending usage metrics.
+  `--severity ERROR --error` fails the job only on ERROR-severity findings,
+  the same posture as the Trivy pack's HIGH,CRITICAL. `--severity` filters
+  the SARIF too, so WARNING and INFO findings don't reach code scanning.
+  The trailing `.` (scan this directory) is required: without a target, the
+  image looks for the code in /src outside GitHub Actions and stops with
+  "Detected Docker environment without a code volume".
+  A customer with their own rules replaces `p/default` with a path to a
+  checked-in `.semgrep.yml`; one with a Semgrep AppSec Platform token may use
+  `semgrep ci` instead, with `SEMGREP_APP_TOKEN` from a secret they already
+  have. Never reference a token the customer has not set up.
+  The SARIF uploads via `github/codeql-action/upload-sarif`.
+  GitLab CI: a job with `image:` set to the same image (same tag and digest)
+  and the same command as its `script:`.
+  Azure Pipelines: NOT a container job. The image is Alpine (musl, no Node,
+  no `groupadd`), which Azure's container jobs can't start. Use a `script:`
+  step on the agent instead:
+  `docker run --rm -v "$(Build.SourcesDirectory):/src" <image above> semgrep scan --config p/default --severity ERROR --error --metrics off --sarif-output=/src/semgrep.sarif`
+  Semgrep publishes no image signature to verify; the digest is the pin.
+last_verified: "2026-11-13"

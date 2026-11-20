@@ -9,6 +9,11 @@
 # `@v1.2.3`. Both paths emit the same rule_id so callers don't need
 # to handle two error codes.
 #
+# A container step (`uses: docker://image…`) has no commit to name: it is pinned
+# by image digest (`@sha256:` and 64 hex), the same bar as Azure and GitLab
+# images below, and denied by tag or with no tag at all (#828). So is a job's
+# `container:` and every `services:` image (#875).
+#
 # Pinning is per runtime (ADR-0071 §2, §4), read from the neutral pipeline
 # model. GitHub Actions: the SHA rule above. Azure Pipelines: a task can't be
 # pinned to a commit (Marketplace tasks aren't git repositories), so a task
@@ -66,6 +71,64 @@ deny contains msg if {
 		),
 	}
 }
+
+# GitHub Actions: a container step is pinned by digest.
+deny contains msg if {
+	some p in _pinned_pipelines
+	p.runtime == "github_actions"
+	some job in p.jobs
+	some step in job.steps
+	is_string(step.uses)
+	startswith(step.uses, "docker://")
+	not regex.match(`@sha256:[0-9a-f]{64}$`, step.uses)
+	msg := {
+		"rule_id": "practice.workflow_pins_action_versions",
+		"message": sprintf(
+			"workflow %v: container step `uses: %v` should be pinned by digest (docker://image@sha256:...), not a tag",
+			[p.path, step.uses],
+		),
+	}
+}
+
+# GitHub Actions: a job's container and service images are pinned by digest.
+deny contains msg if {
+	some p in _pinned_pipelines
+	p.runtime == "github_actions"
+	some image in _github_job_images(p)
+	not regex.match(`@sha256:[0-9a-f]{64}$`, image)
+	msg := {
+		"rule_id": "practice.workflow_pins_action_versions",
+		"message": sprintf(
+			"workflow %v: container `%v` should be pinned by digest (image@sha256:...), not a tag%v",
+			[p.path, image, _expression_hint(image)],
+		),
+	}
+}
+
+# A reusable workflow's image taken whole from an input (`${{ inputs.x }}`) is
+# skipped: the caller passes it, and the caller is judged in its own file. Any
+# other expression is judged as written, so `postgres:${{ matrix.pg }}` (a tag
+# by construction) is denied, and an expression image passes only with a
+# literal digest. A blank image is no container (`image: ''`).
+_github_job_images(p) := {image |
+	some job in p.jobs
+	image := job.image
+	_judgeable_image(image)
+} | {image |
+	some job in p.jobs
+	some image in object.get(job, "services", [])
+	_judgeable_image(image)
+}
+
+_judgeable_image(image) if {
+	is_string(image)
+	trim_space(image) != ""
+	not regex.match(`^\$\{\{\s*inputs\.[A-Za-z0-9_-]+\s*\}\}$`, trim_space(image))
+}
+
+_expression_hint(image) := "; an image built from an expression needs the digest written literally, or take the whole image as a workflow input so its caller pins it" if {
+	contains(image, "${{")
+} else := ""
 
 # Azure Pipelines: a task step names a full version.
 deny contains msg if {
@@ -184,6 +247,7 @@ _unpinned_uses_refs(p) := {ref |
 	count(parts) == 2
 	owner_repo := parts[0]
 	ref := uses
+	not startswith(owner_repo, "docker://")
 	not startswith(owner_repo, "actions/")
 	not startswith(owner_repo, "./")
 	not regex.match("^[0-9a-f]{40}$", parts[1])

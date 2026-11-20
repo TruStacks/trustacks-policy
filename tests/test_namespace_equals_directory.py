@@ -191,3 +191,40 @@ def test_the_inventory_attributes_each_rule_to_its_own_file(tmp_path: Path) -> N
     assert {e["rule_id"] for e in entries} == set(declared_in)
     for entry in entries:
         assert entry["rego_body"] == declared_in[entry["rule_id"]], entry["rule_id"]
+
+
+def _scope(meta: dict, key: str, default: list[str]) -> list[str]:
+    """What the runner's reader takes a declared scope to mean.
+
+    Absent, empty or not a list all mean the default, as in the builder.
+    """
+    value = meta.get(key)
+    return [str(v) for v in value] if isinstance(value, list) and value else default
+
+
+def test_the_inventory_carries_each_rules_declared_scope(tmp_path: Path) -> None:
+    """target_kinds / deliveries / subjects reach the runner as declared.
+
+    Without them the runner's reader defaults every rule to any kind, any
+    delivery, proposals only — an ECS-only rule shows as applying to
+    Kubernetes, and a repo-audit rule as never auditing a repo.
+    """
+    out = tmp_path / "rule_inventory.json"
+    subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "build_inventory.py"),
+         "--source", str(CONSTITUTION), "--out", str(out), "--label", "constitution"],
+        check=True, capture_output=True, text=True, timeout=120,
+    )  # fmt: skip
+    entries = {
+        e["rule_id"]: e
+        for e in json.loads(out.read_text(encoding="utf-8"))["constitution_inventory"]
+    }
+    metadata = _builder().rule_metadata(shutil.which("opa"), [CONSTITUTION], "proposal")
+    for rule_id, meta in metadata.items():
+        if rule_id not in entries:
+            continue
+        entry = entries[rule_id]
+        assert entry["target_kinds"] == _scope(meta, "target_kinds", ["any"]), rule_id
+        assert entry["deliveries"] == _scope(meta, "deliveries", ["any"]), rule_id
+        assert entry["subjects"] == _scope(meta, "subjects", ["proposal"]), rule_id
+    assert entries["proposal.has_ecs_deploy_workflow"]["target_kinds"] == ["ecs-fargate"]

@@ -38,6 +38,20 @@ the marketplace and update if a newer release is preferred.
    repo, which consumes these packs.)
 7. Commit + PR.
 
+### A container step (no GitHub Action)
+
+A tool that publishes no action (Semgrep) is a `docker://` step pinned by the
+tag's multi-arch index digest:
+
+```
+docker buildx imagetools inspect semgrep/semgrep:1.185.0 --format '{{json .Manifest.Digest}}'
+```
+
+Set `action:` to `docker://<image>:<tag>@<digest>` and add the digest to
+`REVIEWED_IMAGES` in the pin test. Run the pack's command in that image
+against a sample repo before landing it: exit status on a finding and on a
+clean repo, and the SARIF it writes.
+
 ## Why pin SHAs (not tags)
 
 Tags can be moved. A malicious actor with push access to an action

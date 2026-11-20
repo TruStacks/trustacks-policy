@@ -458,6 +458,170 @@ test_practice_workflow_pins_action_versions_branch_name_gets_tag_message if {
 	contains(v.message, "should pin to a SHA, not a tag")
 }
 
+# #828: a container step (`uses: docker://…`) is pinned by image digest, the
+# strongest pin there is; it has no commit to name.
+_with_uses(ref) := object.union(good_input, {"proposal": object.union(good_input.proposal, {"files": [
+	{"path": ".github/workflows/ci.yaml", "content": concat("\n", [
+		"name: ci",
+		"on: [push]",
+		"jobs:",
+		"  test:",
+		"    runs-on: ubuntu-latest",
+		"    steps:",
+		"      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11",
+		sprintf("      - uses: %s", [ref]),
+		"      - run: pytest -q && ruff check .",
+		"",
+	])},
+	good_input.proposal.files[1],
+	good_input.proposal.files[2],
+]})})
+
+_pin_denials(ref) := {v.message |
+	some v in proposal.deny with input as _with_uses(ref)
+	v.rule_id == "practice.workflow_pins_action_versions"
+}
+
+test_practice_workflow_pins_action_versions_allows_a_digest_pinned_container if {
+	count(_pin_denials("docker://semgrep/semgrep:1.185.0@sha256:67518c174185a2043fdbed16c70631b79209499b3671178e7194379b48295a0d")) == 0
+	count(_pin_denials("docker://ghcr.io/acme/scan@sha256:67518c174185a2043fdbed16c70631b79209499b3671178e7194379b48295a0d")) == 0
+}
+
+test_practice_workflow_pins_action_versions_denies_a_container_by_tag if {
+	some msg in _pin_denials("docker://semgrep/semgrep:1.185.0")
+	contains(msg, "should be pinned by digest")
+}
+
+test_practice_workflow_pins_action_versions_denies_a_container_with_no_tag if {
+	some msg in _pin_denials("docker://alpine")
+	contains(msg, "should be pinned by digest")
+}
+
+test_practice_workflow_pins_action_versions_denies_a_short_container_digest if {
+	some msg in _pin_denials("docker://alpine@sha256:67518c17")
+	contains(msg, "should be pinned by digest")
+}
+
+# #875: a GitHub Actions job's container and service images are pinned by
+# digest, the bar Azure Pipelines and GitLab CI images already meet.
+_digest := "sha256:67518c174185a2043fdbed16c70631b79209499b3671178e7194379b48295a0d"
+
+_with_job_containers(lines) := object.union(good_input, {"proposal": object.union(good_input.proposal, {"files": [
+	{"path": ".github/workflows/ci.yaml", "content": concat("\n", array.concat(
+		[
+			"name: ci",
+			"on: [push]",
+			"jobs:",
+			"  test:",
+			"    runs-on: ubuntu-latest",
+		],
+		array.concat(lines, [
+			"    steps:",
+			"      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11",
+			"      - run: pytest -q && ruff check .",
+			"",
+		]),
+	))},
+	good_input.proposal.files[1],
+	good_input.proposal.files[2],
+]})})
+
+_container_denials(lines) := {v.message |
+	some v in proposal.deny with input as _with_job_containers(lines)
+	v.rule_id == "practice.workflow_pins_action_versions"
+}
+
+test_github_job_container_by_tag_is_denied if {
+	some msg in _container_denials(["    container: python:3.12-slim"])
+	contains(msg, "`python:3.12-slim` should be pinned by digest")
+}
+
+test_github_job_container_mapping_by_tag_is_denied if {
+	some msg in _container_denials(["    container:", "      image: python:3.12-slim"])
+	contains(msg, "should be pinned by digest")
+}
+
+test_github_service_container_by_tag_is_denied if {
+	some msg in _container_denials(["    services:", "      db:", "        image: postgres:16"])
+	contains(msg, "`postgres:16` should be pinned by digest")
+}
+
+test_github_job_and_service_containers_by_digest_pass if {
+	count(_container_denials([
+		sprintf("    container: python:3.12-slim@%s", [_digest]),
+		"    services:",
+		"      db:",
+		sprintf("        image: postgres:16@%s", [_digest]),
+	])) == 0
+}
+
+test_github_job_container_from_a_workflow_input_is_left_to_the_caller if {
+	# A reusable workflow's image is its caller's input; the caller is judged
+	# in its own file.
+	count(_container_denials([
+		"    container: ${{ inputs.image }}",
+		"    services:",
+		"      db:",
+		"        image: ${{ inputs.db_image }}",
+	])) == 0
+}
+
+test_github_container_tag_from_a_matrix_is_denied if {
+	# CodeRabbit on #878: `postgres:${{ matrix.pg }}` resolves to a tag in this
+	# very workflow, and no caller ever judges it.
+	some msg in _container_denials(["    services:", "      db:", "        image: postgres:${{ matrix.pg }}"])
+	contains(msg, "expression")
+}
+
+test_github_container_from_a_matrix_with_a_literal_digest_passes if {
+	count(_container_denials([sprintf("    container: ghcr.io/acme/${{ matrix.svc }}@%s", [_digest])])) == 0
+}
+
+test_github_blank_image_in_the_model_is_no_container if {
+	# An older runner can send "" for `container: {image: ''}`.
+	model := object.union(good_input, {"proposal": object.union(good_input.proposal, {"pipelines": [{
+		"path": ".github/workflows/ci.yaml",
+		"runtime": "github_actions",
+		"extends": null,
+		"jobs": [{"name": "test", "kind": "job", "image": "", "services": ["  "], "steps": []}],
+	}]})})
+	not _pin_denied_in(model)
+}
+
+_pin_denied_in(input_doc) if {
+	some v in proposal.deny with input as input_doc
+	v.rule_id == "practice.workflow_pins_action_versions"
+}
+
+test_github_empty_container_image_is_no_container if {
+	# `image: ''` is GitHub's conditional-container idiom: no container at all.
+	count(_container_denials(["    container:", "      image: ''"])) == 0
+}
+
+test_github_services_as_a_list_is_not_read if {
+	# GitHub rejects the syntax; the runner's model reads nothing, so neither
+	# does the fallback.
+	count(_container_denials(["    services:", "      - redis:7"])) == 0
+}
+
+test_github_job_container_from_the_model_is_judged if {
+	# The runner sends the normalised model; the rule reads `job.image` from it.
+	model := object.union(good_input, {"proposal": object.union(good_input.proposal, {"pipelines": [{
+		"path": ".github/workflows/ci.yaml",
+		"runtime": "github_actions",
+		"extends": null,
+		"jobs": [{"name": "test", "kind": "job", "image": "python:3.12-slim", "services": ["redis:7"], "steps": []}],
+	}]})})
+	msgs := {v.message |
+		some v in proposal.deny with input as model
+		v.rule_id == "practice.workflow_pins_action_versions"
+	}
+	some a in msgs
+	contains(a, "`python:3.12-slim`")
+	some b in msgs
+	contains(b, "`redis:7`")
+}
+
 # #696: the final stage's last USER decides, and `:group` is not part of the user.
 _with_dockerfile(content) := object.union(good_input, {"proposal": object.union(good_input.proposal, {"files": [
 	good_input.proposal.files[0],
