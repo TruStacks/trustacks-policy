@@ -128,8 +128,10 @@ deploy_workflow:
     # Deploys @@service@@ to the ECS Fargate target @@cluster@@ (tier: @@tier@@).
     #
     # Emitted by TruStacks. It runs when a merged change touches this target's
-    # task definition or binding, so the reviewed commit on main is what
-    # deploys. Roll back by reverting in Git; re-running an old run is refused.
+    # task definition, binding or this workflow, so the reviewed commit on main
+    # is what deploys. Roll back by reverting in Git; re-running an old run is
+    # refused. The paths below are the same as DEPLOY_PATHS: a change the guard
+    # hands off to "that change's own run" must start one.
     name: @@workflow_name@@
     on:
       push:
@@ -137,6 +139,7 @@ deploy_workflow:
         paths:
           - "@@service_root@@/task-definition.json"
           - "@@service_root@@/deploy-target.json"
+          - ".github/workflows/@@workflow_name@@.yaml"
       workflow_dispatch: {}
     permissions: {}
     concurrency:
