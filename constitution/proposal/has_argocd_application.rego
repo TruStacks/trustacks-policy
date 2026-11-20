@@ -13,11 +13,14 @@ rule_metadata["proposal.has_argocd_application"] := {
 	"practice_dimensions": [],
 	"tier_scope": ["any"],
 	"target_kinds": ["kubernetes"],
+	"deliveries": ["gitops"],
 }
 
-# Kubernetes only (ADR-0062): an ECS Fargate target has no ArgoCD.
+# Kubernetes only (ADR-0062): an ECS Fargate target has no ArgoCD. Nor does a
+# Kubernetes target whose CI applies the manifests (ADR-0069, delivery: push).
 deny contains msg if {
 	target_kind == "kubernetes"
+	target_delivery == "gitops"
 	count([
 	f |
 		some f in input.proposal.files
