@@ -304,7 +304,22 @@ deny contains msg if {
 
 # The target kinds the constitution knows. A kind scope naming anything else
 # is treated as "any": a typo must not silence a rule on every target.
-known_target_kinds := {"kubernetes", "ecs-fargate"}
+known_target_kinds := {"kubernetes", "ecs-fargate", "ci-only"}
+
+# ADR-0077 §9: a `ci-only` target deploys nothing. The runner authors the CI
+# pipeline alone, so no deploy-artifact rule applies (each checks its kind in
+# its body) and the proposal may not write deploy paths (`allowed_paths`).
+ci_only if target_kind == "ci-only"
+
+# ADR-0077 §10: a ci-only run whose repo has no `environment-profile.yaml`
+# proposes a blank starter instead of the pipeline. The runner says so with
+# `input.context.starter_profile`; `proposal.starter_profile_is_blank` then
+# holds it to the one file, asserting nothing. Any other kind is never a
+# starter run, whatever the flag says: a missing profile still fails there.
+starter_profile_run if {
+	ci_only
+	input.context.starter_profile == true
+}
 
 _tiers := {"dev", "uat", "prod"}
 

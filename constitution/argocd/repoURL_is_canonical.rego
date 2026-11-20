@@ -19,9 +19,14 @@ rule_metadata["argocd.repoURL_is_canonical"] := {
 	"required_tooling_categories": [],
 	"practice_dimensions": [],
 	"tier_scope": ["any"],
+	# Only a Kubernetes target has ArgoCD Applications (ADR-0060, ADR-0077 §9).
+	"target_kinds": ["kubernetes"],
 }
 
+# The kind is checked here, not only declared above: constitution rules are
+# not filtered by their own metadata (proposal/lib.rego).
 deny contains msg if {
+	target_kind == "kubernetes"
 	some f in input.proposal.files
 	startswith(f.path, "argo-apps/argo-apps-")
 	endswith(f.path, "-application.yaml")

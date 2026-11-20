@@ -6,6 +6,10 @@
 # (`ci_runtime`, GitHub Actions unless the runner says otherwise): a file under
 # `.github/workflows/`, for Azure Pipelines `azure-pipelines.yml` or a file
 # under `azure-pipelines/`, for GitLab CI a file under `.gitlab/ci/`.
+#
+# ADR-0077 §10: a ci-only first run's starter proposal holds the Stack file and
+# nothing else, so it carries no pipeline; the next run, once the customer has
+# filled the file in, does.
 
 package proposal
 
@@ -19,6 +23,7 @@ rule_metadata["proposal.has_workflow"] := {
 }
 
 deny contains msg if {
+	not starter_profile_run
 	ci_runtime == "github_actions"
 	count([f | some f in input.proposal.files; startswith(f.path, ".github/workflows/")]) == 0
 	msg := {
@@ -28,6 +33,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
+	not starter_profile_run
 	ci_runtime == "azure_pipelines"
 	count([f | some f in input.proposal.files; _is_azure_pipeline_path(f.path)]) == 0
 	msg := {
@@ -37,6 +43,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
+	not starter_profile_run
 	ci_runtime == "gitlab_ci"
 	count([f | some f in input.proposal.files; _is_gitlab_pipeline_path(f.path)]) == 0
 	msg := {
