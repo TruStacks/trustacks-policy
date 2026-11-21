@@ -7,13 +7,17 @@
 # and `azure-pipelines/` for Azure Pipelines, `.gitlab/ci/` for GitLab CI (never
 # the platform repo's own root `.gitlab-ci.yml`). A proposal for one runtime may
 # not write another's pipeline files.
+#
+# ADR-0077 §9: a `ci-only` target deploys nothing, so its proposal may write the
+# pipeline location only, never `gitops/` or `argo-apps/`; on a first run with
+# no Stack file, it may write that file and nothing else (§10).
 
 package proposal
 
 import rego.v1
 
 rule_metadata["proposal.allowed_paths"] := {
-	"description": "Every artifact path lives under gitops/, argo-apps/, or the CI runtime's pipeline location (.github/workflows/, azure-pipelines.yml / azure-pipelines/, or .gitlab/ci/). environment-profile.yaml only for a scoped fix declaring the tool the customer chose.",
+	"description": "Every artifact path lives under gitops/, argo-apps/, or the CI runtime's pipeline location (.github/workflows/, azure-pipelines.yml / azure-pipelines/, or .gitlab/ci/); a ci-only target gets the pipeline location alone. environment-profile.yaml only for a scoped fix declaring the tool the customer chose, or a ci-only first run's blank starter.",
 	"required_tooling_categories": [],
 	"practice_dimensions": [],
 	"tier_scope": ["any"],
@@ -27,8 +31,13 @@ _runtime_pipeline_prefixes := {
 
 _runtime_pipeline_files := {"azure_pipelines": ["azure-pipelines.yml", "azure-pipelines.yaml"]}
 
+# Where deploy artifacts live. None for a ci-only target: it has nothing to deploy.
+_deploy_prefixes := [] if {
+	ci_only
+} else := ["gitops/", "argo-apps/"]
+
 allowed_prefixes := array.concat(
-	["gitops/", "argo-apps/"],
+	_deploy_prefixes,
 	object.get(_runtime_pipeline_prefixes, ci_runtime, []),
 )
 
@@ -54,6 +63,13 @@ stack_file := "environment-profile.yaml"
 is_allowed_path(path) if {
 	path == stack_file
 	input.context.remediation.declares_profile == true
+}
+
+# ADR-0077 §10: the blank starter a ci-only first run proposes. What it may
+# contain is `proposal.starter_profile_is_blank`'s business.
+is_allowed_path(path) if {
+	path == stack_file
+	starter_profile_run
 }
 
 # Fail closed on a CI runtime the constitution doesn't know: deny, naming it,

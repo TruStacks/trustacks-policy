@@ -47,6 +47,8 @@ test_rule_index_lists_all_constitution_rules if {
 		"practice.workflow_prod_deploy_requires_environment",
 		# ADR-0070 — the Kubernetes workload baseline.
 		"practice.k8s_workload_restricted",
+		# ADR-0077 §10 — a ci-only first run's blank starter.
+		"proposal.starter_profile_is_blank",
 	}
 	{rid | some rid, _ in idx} == expected
 }

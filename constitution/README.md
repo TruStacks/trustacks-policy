@@ -68,8 +68,13 @@ describes them and is not used as a filter.
 
 - **`proposal.*`** — shape and safety of the change itself: `allowed_paths`,
   `no_path_traversal`, `has_workflow`, `has_helm_chart`, `has_kustomization`,
-  `has_argocd_application`, and for ECS Fargate targets
-  `has_ecs_task_definition`, `has_ecs_deploy_workflow`.
+  `has_argocd_application`, for ECS Fargate targets
+  `has_ecs_task_definition`, `has_ecs_deploy_workflow`, and for `ci-only`
+  targets `starter_profile_is_blank`. A `ci-only` target deploys nothing: its
+  proposals may write the CI pipeline location only (never `gitops/` or
+  `argo-apps/`), and on a first run with no `environment-profile.yaml` the one
+  proposal is a blank starter that asserts nothing, no tool, no practice,
+  only `schema_version` and `name`.
 - **`argocd.*`** — `repoURL_is_canonical`: an emitted ArgoCD Application points
   at the platform repo it was written to.
 - **`practice.*`** — the delivery behaviours a proposal must demonstrate:
